@@ -35,24 +35,26 @@ export default function Nav() {
   return (
     <>
       <nav className="bg-white shadow-lg">
-        <div className="max-w-6xl mx-auto px-4">
-          <div className="flex justify-between">
-            <div className="flex space-x-7">
-              <Link href="/" className="flex items-center py-4">
+        <div className="container mx-auto px-4">
+          <div className="flex justify-between items-center h-16">
+            {/* Left side links - using flex-start to push to left edge */}
+            <div className="flex-1 flex items-center justify-start space-x-8">
+              <Link href="/" className="flex items-center">
                 <span className="font-bold">Audibloom</span>
               </Link>
-              <Link href="/about" className="flex items-center py-4">
+              <Link href="/about">
                 About
               </Link>
-              <Link href="/contact" className="flex items-center py-4">
+              <Link href="/contact">
                 Contact
               </Link>
-              <Link href="/services" className="flex items-center py-4">
+              <Link href="/services">
                 Services
               </Link>
             </div>
             
-            <div className="flex items-center space-x-4">
+            {/* Right side auth links - using flex-end to push to right edge */}
+            <div className="flex items-center justify-end space-x-4">
               {!isLoggedIn ? (
                 <>
                   <button

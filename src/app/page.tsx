@@ -3,13 +3,14 @@
 export default function Home() {
   return (
     <main className="max-w-2xl mx-auto text-center">
+      <img 
+        src="https://h245f0zpl5ltanyh.public.blob.vercel-storage.com/audibloom_logo-transp-lbu8FBtKMafade7Ru6bkwYrrMSOdBe.png"
+        alt="Audibloom Logo"
+        className="mx-auto"
+      />
       <p>
-        Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor 
-        incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis 
-        nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. 
-        Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore 
-        eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt 
-        in culpa qui officia deserunt mollit anim id est laborum.
+        <span className="font-bold text-xl block mb-2">Bringing Books to Life</span>
+        Audibloom turns books into captivating short videos with imagery, subtitles, and narration, amplifying author visibility and market reach.
       </p>
     </main>
   );
