@@ -11,6 +11,15 @@ export default function CreateAccount() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
+  const getRedirectUrl = () => {
+    const isLocalhost = process.env.NODE_ENV === 'development';
+    const baseUrl = isLocalhost 
+      ? 'http://localhost:3000'
+      : 'https://vercel-frontend-v2.vercel.app';
+
+    return `${baseUrl}/auth/callback`;
+  };
+
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
@@ -27,7 +36,7 @@ export default function CreateAccount() {
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: getRedirectUrl(),
         },
       })
 
