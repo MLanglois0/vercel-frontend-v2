@@ -2,6 +2,7 @@
 import React, { useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import { createUserProfile } from '@/app/actions/user'
 
 export default function CreateAccount() {
   const [email, setEmail] = useState('')
@@ -10,6 +11,10 @@ export default function CreateAccount() {
   const [step, setStep] = useState(1) // 1: initial form, 2: success (removed verification step)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
+  const [phoneNumber, setPhoneNumber] = useState('')
+  const [dateOfBirth, setDateOfBirth] = useState('')
 
   const getRedirectUrl = () => {
     const isLocalhost = process.env.NODE_ENV === 'development';
@@ -24,7 +29,6 @@ export default function CreateAccount() {
     e.preventDefault()
     setError('')
     
-    // Password validation
     if (password !== confirmPassword) {
       setError('Passwords do not match')
       return
@@ -32,7 +36,7 @@ export default function CreateAccount() {
     
     try {
       setLoading(true)
-      const { error } = await supabase.auth.signUp({
+      const { data: authData, error: authError } = await supabase.auth.signUp({
         email,
         password,
         options: {
@@ -40,10 +44,26 @@ export default function CreateAccount() {
         },
       })
 
-      if (error) throw error
+      if (authError) throw authError
+
+      if (authData.user) {
+        try {
+          await createUserProfile(authData.user.id, {
+            email,
+            first_name: firstName,
+            last_name: lastName,
+            phone_number: phoneNumber || null,
+            date_of_birth: dateOfBirth,
+          })
+        } catch (profileError) {
+          console.error('Profile Error:', profileError)
+          throw profileError
+        }
+      }
 
       setStep(2)
     } catch (error) {
+      console.error('Full error:', error)
       setError(error instanceof Error ? error.message : 'An error occurred')
     } finally {
       setLoading(false)
@@ -88,6 +108,45 @@ export default function CreateAccount() {
               onChange={(e) => setConfirmPassword(e.target.value)}
               className="w-full p-2 border rounded"
               required
+            />
+          </div>
+          <div>
+            <label className="block mb-2">First Name</label>
+            <input
+              type="text"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              className="w-full p-2 border rounded"
+              required
+            />
+          </div>
+          <div>
+            <label className="block mb-2">Last Name</label>
+            <input
+              type="text"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+              className="w-full p-2 border rounded"
+              required
+            />
+          </div>
+          <div>
+            <label className="block mb-2">Date of Birth</label>
+            <input
+              type="date"
+              value={dateOfBirth}
+              onChange={(e) => setDateOfBirth(e.target.value)}
+              className="w-full p-2 border rounded"
+              required
+            />
+          </div>
+          <div>
+            <label className="block mb-2">Phone Number (optional)</label>
+            <input
+              type="tel"
+              value={phoneNumber}
+              onChange={(e) => setPhoneNumber(e.target.value)}
+              className="w-full p-2 border rounded"
             />
           </div>
           <button
