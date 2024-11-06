@@ -4,10 +4,12 @@ import Link from 'next/link';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { useEffect, useState } from 'react'
 import { Session } from '@supabase/supabase-js'
+import { LoginSheet } from '@/components/login-sheet';
 
 export default function Home() {
   const [session, setSession] = useState<Session | null>(null)
   const supabase = createClientComponentClient()
+  const [isLoginOpen, setIsLoginOpen] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -51,12 +53,12 @@ export default function Home() {
             </Link>
           ) : (
             <>
-              <Link 
-                href="/auth/login" 
-                className="text-inherit no-underline hover:opacity-80"
+              <button 
+                onClick={() => setIsLoginOpen(true)} 
+                className="text-inherit hover:opacity-80"
               >
                 Login
-              </Link>
+              </button>
               <Link 
                 href="/auth/signup" 
                 className="text-inherit no-underline hover:opacity-80"
@@ -78,6 +80,11 @@ export default function Home() {
           in culpa qui officia deserunt mollit anim id est laborum.
         </p>
       </main>
+
+      <LoginSheet 
+        isOpen={isLoginOpen}
+        onClose={() => setIsLoginOpen(false)}
+      />
     </div>
   );
 }
