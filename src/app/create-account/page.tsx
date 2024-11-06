@@ -17,7 +17,7 @@ export default function CreateAccount() {
       ? 'http://localhost:3000'
       : 'https://vercel-frontend-v2.vercel.app';
 
-    return `${baseUrl}/auth/callback`;
+    return baseUrl;
   };
 
   const handleSignUp = async (e: React.FormEvent) => {
