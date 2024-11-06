@@ -1,6 +1,28 @@
+"use client";
+
 import Link from 'next/link';
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
+import { useEffect, useState } from 'react'
+import { Session } from '@supabase/supabase-js'
 
 export default function Home() {
+  const [session, setSession] = useState<Session | null>(null)
+  const supabase = createClientComponentClient()
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
   return (
     <div className="min-h-screen p-8 font-[family-name:var(--font-geist-sans)]">
       <nav className="w-full flex justify-between items-center gap-6 mb-20 pb-4 border-b border-black">
@@ -20,12 +42,29 @@ export default function Home() {
         </div>
         
         <div className="flex items-center gap-6">
-          <Link href="/login" className="text-inherit no-underline hover:opacity-80">
-            Login
-          </Link>
-          <Link href="/signup" className="text-inherit no-underline hover:opacity-80">
-            Create Account
-          </Link>
+          {session ? (
+            <Link 
+              href="/dashboard" 
+              className="text-inherit no-underline hover:opacity-80"
+            >
+              Dashboard
+            </Link>
+          ) : (
+            <>
+              <Link 
+                href="/auth/login" 
+                className="text-inherit no-underline hover:opacity-80"
+              >
+                Login
+              </Link>
+              <Link 
+                href="/auth/signup" 
+                className="text-inherit no-underline hover:opacity-80"
+              >
+                Create Account
+              </Link>
+            </>
+          )}
         </div>
       </nav>
 
