@@ -45,6 +45,11 @@ export default function Nav() {
               <Link href="/" className="flex items-center">
                 <span className="font-bold">Audibloom</span>
               </Link>
+              {isLoggedIn && (
+                <Link href="/projects">
+                  Projects
+                </Link>
+              )}
               <Link href="/about">
                 About
               </Link>
