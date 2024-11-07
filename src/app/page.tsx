@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import Image from 'next/image';
 
 export default function Home() {
   const router = useRouter();
@@ -22,10 +23,13 @@ export default function Home() {
 
   return (
     <main className="max-w-2xl mx-auto text-center">
-      <img 
+      <Image 
         src="https://h245f0zpl5ltanyh.public.blob.vercel-storage.com/audibloom_logo-transp-lbu8FBtKMafade7Ru6bkwYrrMSOdBe.png"
         alt="Audibloom Logo"
+        width={500}
+        height={300}
         className="mx-auto"
+        priority
       />
       <p>
         <span className="font-bold text-xl block mb-2">Bringing Books to Life</span>
