@@ -8,6 +8,7 @@ import LoginSheet from './LoginSheet'
 
 export default function Nav() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [userId, setUserId] = useState<string | null>(null)
   const [isLoginOpen, setIsLoginOpen] = useState(false)
   const router = useRouter()
 
@@ -15,6 +16,7 @@ export default function Nav() {
     // Check initial auth state
     supabase.auth.getSession().then(({ data: { session } }) => {
       setIsLoggedIn(!!session)
+      setUserId(session?.user?.id || null)
     })
 
     // Listen for auth changes
@@ -22,6 +24,7 @@ export default function Nav() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setIsLoggedIn(!!session)
+      setUserId(session?.user?.id || null)
     })
 
     return () => subscription.unsubscribe()
@@ -69,6 +72,7 @@ export default function Nav() {
                 </>
               ) : (
                 <>
+                  <span className="text-blue-300">{userId}</span>
                   <Link href="/profile" className="py-2 px-4 hover:text-blue-500">
                     Profile
                   </Link>
