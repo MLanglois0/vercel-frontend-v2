@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { PlusCircle, Book, Clock } from "lucide-react";
 import { supabase } from '@/lib/supabase';
+import { useRouter } from 'next/navigation';
 
 interface Project {
   id: string;
@@ -18,6 +19,7 @@ interface Project {
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const router = useRouter();
 
   useEffect(() => {
     async function fetchProjects() {
@@ -44,6 +46,10 @@ export default function ProjectsPage() {
     fetchProjects();
   }, []);
 
+  const handleProjectClick = (projectId: string) => {
+    router.push(`/projects/${projectId}`);
+  };
+
   return (
     <div className="container mx-auto px-4 py-8">
       <header className="flex justify-between items-center mb-8">
@@ -62,7 +68,11 @@ export default function ProjectsPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {projects.map((project) => (
-            <Card key={project.id} className="flex flex-col">
+            <Card 
+              key={project.id} 
+              className="flex flex-col cursor-pointer hover:shadow-lg transition-shadow"
+              onClick={() => handleProjectClick(project.id)}
+            >
               <CardHeader>
                 <CardTitle>{project.project_name}</CardTitle>
               </CardHeader>
