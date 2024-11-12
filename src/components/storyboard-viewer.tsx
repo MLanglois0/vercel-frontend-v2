@@ -32,10 +32,10 @@ export function StoryboardViewer({
           className="flex overflow-x-scroll space-x-4 pb-4 scrollbar-hide"
         >
           {storyboardImages.map((image, index) => (
-            <Card key={index} className="flex-shrink-0 w-64">
+            <Card key={index} className="flex-shrink-0 w-80">
               <CardContent className="p-2">
                 <div className="relative">
-                  <img src={image} alt={`Storyboard ${index + 1}`} className="w-full h-40 object-cover rounded" />
+                  <img src={image} alt={`Storyboard ${index + 1}`} className="w-full h-56 object-cover rounded" />
                   <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded">
                     {index + 1}
                   </div>
