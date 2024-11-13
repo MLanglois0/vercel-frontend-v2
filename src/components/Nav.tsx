@@ -1,34 +1,19 @@
 "use client";
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import LoginSheet from './LoginSheet'
+import { useSupabaseSession } from '@/hooks/useSupabaseSession';
 
 export default function Nav() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false)
-  const [userId, setUserId] = useState<string | null>(null)
-  const [isLoginOpen, setIsLoginOpen] = useState(false)
-  const router = useRouter()
+  const { session } = useSupabaseSession();
+  const router = useRouter();
+  const [isLoginOpen, setIsLoginOpen] = useState(false);
 
-  useEffect(() => {
-    // Check initial auth state
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setIsLoggedIn(!!session)
-      setUserId(session?.user?.id || null)
-    })
-
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setIsLoggedIn(!!session)
-      setUserId(session?.user?.id || null)
-    })
-
-    return () => subscription.unsubscribe()
-  }, [])
+  const isLoggedIn = !!session;
+  const userId = session?.user?.id;
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
