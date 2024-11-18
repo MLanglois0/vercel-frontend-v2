@@ -1,161 +1,111 @@
 "use client";
 
 import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase';
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { PlusCircle, Book, Clock } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import { useToast } from "@/hooks/use-toast"
-import { useRouter } from 'next/navigation';
-import { uploadFile } from "@/app/actions/upload";
-import { useSupabaseSession } from '@/hooks/useSupabaseSession';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { PlusCircle, Book } from "lucide-react";
+import { toast } from "sonner";
+import { uploadFile } from '@/app/actions/upload';
 
-export interface Project {
+interface Project {
   id: string;
-  created_at: string;
-  user_id: string;
   project_name: string;
   book_title: string;
-  description: string | null;
-  epub_file_path: string | null;
+  description: string;
+  epub_file_path?: string;
   status: string;
+  user_id: string;
+  created_at: string;
 }
 
-export default function ProjectsPage() {
-  const { session, loading } = useSupabaseSession();
-  const router = useRouter();
-  const { toast } = useToast();
+export default function Projects() {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [showNewProject, setShowNewProject] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [formData, setFormData] = useState({
+    project_name: '',
+    book_title: '',
+    description: '',
+  });
 
   useEffect(() => {
-    if (!loading && !session) {
-      router.push('/login');
-    }
-  }, [session, loading, router]);
-
-  useEffect(() => {
-    async function fetchProjects() {
-      try {
-        if (!session) return;
-        const response = await fetch('/api/projects', {
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          credentials: 'include',
-        });
-        
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.details || 'Failed to fetch projects');
-        }
-        
-        const data = await response.json();
-        setProjects(data);
-      } catch (error) {
-        console.error('Error fetching projects:', error);
-        toast({
-          title: "Error",
-          description: error instanceof Error ? error.message : "Failed to load projects",
-          variant: "destructive",
-        });
-      }
-    }
-
     fetchProjects();
-  }, [session, toast]);
+  }, []);
 
-  async function handleCreateProject(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setIsSubmitting(true);
+  async function fetchProjects() {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
 
-    try {
-      const formData = new FormData(event.currentTarget);
-      const file = formData.get('epub') as File;
-      
-      // First, create project without file path
-      const initialProjectData = {
-        project_name: formData.get('project_name'),
-        book_title: formData.get('book_title'),
-        description: formData.get('description') || null,
-        status: 'NEW'  // Assuming this matches your enum/status options in DB
-      };
+    const { data, error } = await supabase
+      .from('projects')
+      .select('*')
+      .eq('user_id', session.user.id)
+      .order('created_at', { ascending: false });
 
-      // Create initial project
-      const response = await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(initialProjectData),
-      });
-
-      const projectResponse = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(projectResponse.details || projectResponse.message || 'Failed to create project');
-      }
-
-      // Now handle file upload with project ID
-      if (file) {
-        const uploadFormData = new FormData();
-        uploadFormData.append('file', file);
-        
-        try {
-          // Construct file path: userId/projectId/filename.epub
-          const filePath = await uploadFile(uploadFormData, projectResponse.id);
-          
-          // Update project with file path
-          const updateResponse = await fetch(`/api/projects/${projectResponse.id}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ epub_file_path: filePath }),
-          });
-
-          if (!updateResponse.ok) {
-            throw new Error('Failed to update project with file path');
-          }
-
-          const updatedProject = await updateResponse.json();
-          setProjects(prev => prev.map(p => 
-            p.id === updatedProject.id ? updatedProject : p
-          ));
-        } catch (uploadError) {
-          console.error('Upload failed:', uploadError);
-          // Project was created but file upload failed
-          toast({
-            title: "Partial Success",
-            description: "Project created but file upload failed. You can upload the file later.",
-            variant: "default",
-          });
-          setProjects(prev => [projectResponse, ...prev]);
-          return;
-        }
-      }
-
-      setProjects(prev => [projectResponse, ...prev]);
-      toast({
-        title: "Success",
-        description: "Project created successfully",
-      });
-    } catch (error) {
-      console.error('Detailed error:', error);
-      toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to create project",
-        variant: "destructive",
-      });
-    } finally {
-      setIsSubmitting(false);
+    if (error) {
+      console.error('Error fetching projects:', error);
+      toast.error('Failed to load projects');
+    } else {
+      setProjects(data || []);
     }
+    setLoading(false);
   }
 
-  const handleProjectClick = (projectId: string) => {
-    router.push(`/projects/${projectId}`);
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.epub')) {
+      toast.error('Please upload an EPUB file');
+      return;
+    }
+
+    setSelectedFile(file);
   };
+
+  const handleCreateProject = async () => {
+    if (!selectedFile?.name.toLowerCase().endsWith('.epub')) {
+      toast.error('Please select a valid EPUB file (.epub)')
+      return
+    }
+
+    if (!formData.project_name || !formData.book_title) {
+      toast.error('Please fill out all required fields')
+      return
+    }
+
+    setUploading(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No session')
+
+      // Create FormData
+      const uploadFormData = new FormData()
+      uploadFormData.append('file', selectedFile)
+      uploadFormData.append('project_name', formData.project_name)
+      uploadFormData.append('book_title', formData.book_title)
+      uploadFormData.append('description', formData.description)
+
+      // Pass userId to server action
+      await uploadFile(uploadFormData, session.user.id)
+
+      toast.success('Project created successfully')
+      setFormData({ project_name: '', book_title: '', description: '' })
+      setSelectedFile(null)
+      setShowNewProject(false)
+      await fetchProjects()
+    } catch (error) {
+      console.error('Error:', error)
+      toast.error('Failed to create project')
+    } finally {
+      setUploading(false)
+    }
+  }
 
   if (loading) {
     return <div>Loading...</div>;
@@ -164,101 +114,112 @@ export default function ProjectsPage() {
   return (
     <div className="container mx-auto px-4 py-8">
       <header className="flex justify-between items-center mb-8">
-        <h1 className="text-3xl font-bold">My Projects</h1>
-        <Dialog>
-          <DialogTrigger asChild>
-            <Button>
-              <PlusCircle className="mr-2 h-4 w-4" /> New Project
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Create New Project</DialogTitle>
-            </DialogHeader>
-            <form onSubmit={handleCreateProject} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="project_name">Project Name</Label>
-                <Input 
-                  id="project_name" 
-                  name="project_name" 
-                  required 
-                  placeholder="Enter project name"
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="book_title">Book Title</Label>
-                <Input 
-                  id="book_title" 
-                  name="book_title" 
-                  required 
-                  placeholder="Enter book title"
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="description">Description</Label>
-                <Textarea 
-                  id="description" 
-                  name="description" 
-                  placeholder="Enter project description"
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="epub">Upload EPUB</Label>
-                <Input 
-                  id="epub" 
-                  name="epub" 
-                  type="file" 
-                  accept=".epub"
-                  required
-                />
-              </div>
-
-              <Button type="submit" disabled={isSubmitting} className="w-full">
-                {isSubmitting ? "Creating..." : "Create Project"}
-              </Button>
-            </form>
-          </DialogContent>
-        </Dialog>
+        <h1 className="text-3xl font-bold">My Audiobook Projects</h1>
+        <Button onClick={() => setShowNewProject(!showNewProject)}>
+          <PlusCircle className="mr-2 h-4 w-4" /> Start New Project
+        </Button>
       </header>
 
-      {projects.length === 0 ? (
-        <div className="text-center text-muted-foreground">
-          No projects found. Create a new project to get started!
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {projects.map((project) => (
-            <Card 
-              key={project.id} 
-              className="flex flex-col cursor-pointer hover:shadow-lg transition-shadow"
-              onClick={() => handleProjectClick(project.id)}
+      {showNewProject && (
+        <Card className="p-6 mb-8">
+          <h2 className="text-xl font-semibold mb-4">Create New Project</h2>
+          <form onSubmit={handleCreateProject} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Project Name *</label>
+              <Input
+                value={formData.project_name}
+                onChange={(e) => setFormData({ ...formData, project_name: e.target.value })}
+                placeholder="Enter project name"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Book Title *</label>
+              <Input
+                value={formData.book_title}
+                onChange={(e) => setFormData({ ...formData, book_title: e.target.value })}
+                placeholder="Enter book title"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Description</label>
+              <Textarea
+                value={formData.description}
+                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                placeholder="Enter project description"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Upload EPUB File *</label>
+              <p className="text-sm text-gray-500 mb-2">Only .epub files are supported</p>
+              <div className="mt-1 flex items-center">
+                <Input
+                  type="file"
+                  accept=".epub"
+                  onChange={handleFileSelect}
+                  disabled={uploading}
+                  required
+                  className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"
+                />
+              </div>
+              {selectedFile && (
+                <p className="text-sm text-green-600 mt-2">
+                  Selected file: {selectedFile.name}
+                </p>
+              )}
+              {uploading && <p className="text-sm text-gray-500 mt-2">Creating project...</p>}
+            </div>
+            <Button 
+              type="submit" 
+              disabled={uploading || !selectedFile || !formData.project_name || !formData.book_title}
+              className={`w-full ${
+                uploading || !selectedFile || !formData.project_name || !formData.book_title
+                  ? ''  // default button color
+                  : 'bg-green-600 hover:bg-green-700'  // green when ready
+              }`}
             >
-              <CardHeader>
-                <CardTitle>{project.project_name}</CardTitle>
-              </CardHeader>
-              <CardContent className="flex-grow">
-                <p className="text-muted-foreground">{project.book_title}</p>
-                {project.description && (
-                  <p className="text-sm text-muted-foreground mt-2">{project.description}</p>
-                )}
-              </CardContent>
-              <CardFooter className="flex justify-between">
-                <div className="flex items-center text-muted-foreground">
-                  <Book className="mr-2 h-4 w-4" />
-                  <span>{project.status}</span>
-                </div>
-                <div className="flex items-center text-muted-foreground">
-                  <Clock className="mr-2 h-4 w-4" />
-                  <span>{new Date(project.created_at).toLocaleDateString()}</span>
-                </div>
-              </CardFooter>
-            </Card>
-          ))}
-        </div>
+              {uploading ? 'Creating Project...' : 'Create Project'}
+            </Button>
+          </form>
+        </Card>
       )}
+
+      <section>
+        <h2 className="text-2xl font-semibold mb-4">Existing Projects</h2>
+        {projects.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {projects.map((project) => (
+              <Card key={project.id}>
+                <CardHeader>
+                  <CardTitle>{project.project_name}</CardTitle>
+                  <CardDescription>{project.book_title}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-gray-500">{project.description}</p>
+                  <div className="mt-2 flex items-center">
+                    <span className="text-sm text-gray-500">{project.status}</span>
+                  </div>
+                </CardContent>
+                <CardFooter>
+                  <Button variant="outline" className="w-full">
+                    <Book className="mr-2 h-4 w-4" /> Open Project
+                  </Button>
+                </CardFooter>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center h-40">
+              <p className="text-muted-foreground mb-4">Create a new project to get started!</p>
+              <Button onClick={() => setShowNewProject(true)}>
+                <PlusCircle className="mr-2 h-4 w-4" /> Create Your First Project
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+      </section>
     </div>
   );
 } 

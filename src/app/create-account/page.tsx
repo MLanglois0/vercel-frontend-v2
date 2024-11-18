@@ -1,195 +1,175 @@
 "use client"
-import React, { useState } from 'react'
-import Link from 'next/link'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { createUserProfile } from '@/app/actions/user'
+import { toast } from 'sonner'
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 export default function CreateAccount() {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
-  const [step, setStep] = useState(1) // 1: initial form, 2: success (removed verification step)
-  const [error, setError] = useState('')
+  const router = useRouter()
+  const [formData, setFormData] = useState({
+    email: '',
+    password: '',
+    confirmPassword: '',
+    firstName: '',
+    lastName: '',
+    phoneNumber: '',
+    dateOfBirth: ''
+  })
   const [loading, setLoading] = useState(false)
-  const [firstName, setFirstName] = useState('')
-  const [lastName, setLastName] = useState('')
-  const [phoneNumber, setPhoneNumber] = useState('')
-  const [dateOfBirth, setDateOfBirth] = useState('')
-
-  const getRedirectUrl = () => {
-    const isLocalhost = process.env.NODE_ENV === 'development';
-    const baseUrl = isLocalhost 
-      ? 'http://localhost:3000'
-      : 'https://vercel-frontend-v2.vercel.app';
-
-    return baseUrl;
-  };
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError('')
     
-    if (password !== confirmPassword) {
-      setError('Passwords do not match')
+    if (formData.password !== formData.confirmPassword) {
+      toast.error('Passwords do not match')
+      return
+    }
+
+    if (!formData.dateOfBirth) {
+      toast.error('Date of birth is required')
       return
     }
     
     try {
       setLoading(true)
+      
       const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
-        password,
+        email: formData.email,
+        password: formData.password,
         options: {
-          emailRedirectTo: getRedirectUrl(),
-        },
+          emailRedirectTo: `${window.location.origin}/`,
+          data: {
+            first_name: formData.firstName,
+            last_name: formData.lastName
+          }
+        }
       })
 
       if (authError) throw authError
 
       if (authData.user) {
-        try {
-          await createUserProfile(authData.user.id, {
-            email,
-            first_name: firstName,
-            last_name: lastName,
-            phone_number: phoneNumber || null,
-            date_of_birth: dateOfBirth,
-          })
-        } catch (profileError) {
-          console.error('Profile Error:', profileError)
-          throw profileError
+        const result = await createUserProfile(authData.user.id, {
+          email: formData.email,
+          first_name: formData.firstName,
+          last_name: formData.lastName,
+          phone_number: formData.phoneNumber || null,
+          date_of_birth: formData.dateOfBirth
+        })
+
+        if (!result.success) {
+          throw new Error(result.error)
         }
+        
+        toast.success('Account created! Please check your email to verify your account.')
+        router.push('/')
       }
 
-      setStep(2)
     } catch (error) {
-      console.error('Full error:', error)
-      setError(error instanceof Error ? error.message : 'An error occurred')
+      console.error('Signup error:', error)
+      toast.error(error instanceof Error ? error.message : 'Failed to create account')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="max-w-md mx-auto mt-10">
-      {error && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-          {error}
-        </div>
-      )}
+    <div className="container max-w-md mx-auto p-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>Create Account</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSignUp} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Email *</label>
+              <Input
+                type="email"
+                required
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                placeholder="Enter your email"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1">First Name *</label>
+              <Input
+                type="text"
+                required
+                value={formData.firstName}
+                onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
+                placeholder="Enter your first name"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1">Last Name *</label>
+              <Input
+                type="text"
+                required
+                value={formData.lastName}
+                onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
+                placeholder="Enter your last name"
+              />
+            </div>
 
-      {step === 1 && (
-        <form onSubmit={handleSignUp} className="space-y-4">
-          <div>
-            <label className="block mb-2">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full p-2 border rounded"
-              required
-            />
-          </div>
-          <div>
-            <label className="block mb-2">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full p-2 border rounded"
-              required
-            />
-          </div>
-          <div>
-            <label className="block mb-2">Confirm Password</label>
-            <input
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full p-2 border rounded"
-              required
-            />
-          </div>
-          <div>
-            <label className="block mb-2">First Name</label>
-            <input
-              type="text"
-              value={firstName}
-              onChange={(e) => setFirstName(e.target.value)}
-              className="w-full p-2 border rounded"
-              required
-            />
-          </div>
-          <div>
-            <label className="block mb-2">Last Name</label>
-            <input
-              type="text"
-              value={lastName}
-              onChange={(e) => setLastName(e.target.value)}
-              className="w-full p-2 border rounded"
-              required
-            />
-          </div>
-          <div>
-            <label className="block mb-2">Date of Birth</label>
-            <input
-              type="date"
-              value={dateOfBirth}
-              onChange={(e) => setDateOfBirth(e.target.value)}
-              className="w-full p-2 border rounded"
-              required
-            />
-          </div>
-          <div>
-            <label className="block mb-2">Phone Number (optional)</label>
-            <input
-              type="tel"
-              value={phoneNumber}
-              onChange={(e) => setPhoneNumber(e.target.value)}
-              className="w-full p-2 border rounded"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 disabled:opacity-50"
-          >
-            {loading ? 'Creating Account...' : 'Create Account'}
-          </button>
-        </form>
-      )}
+            <div>
+              <label className="block text-sm font-medium mb-1">Phone Number</label>
+              <Input
+                type="tel"
+                value={formData.phoneNumber}
+                onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
+                placeholder="Enter your phone number (optional)"
+              />
+            </div>
 
-      {step === 2 && (
-        <div className="space-y-4">
-          <h2 className="text-xl font-semibold text-center mb-4">Check Your Email</h2>
-          <p className="text-center text-gray-600">
-            We&apos;ve sent a verification link to <span className="font-medium">{email}</span>.
-          </p>
-          <p className="text-center text-gray-600">
-            Please click the link in the email to verify your account.
-          </p>
-          <p className="text-center text-sm text-gray-500 mt-4">
-            Didn&apos;t receive the email? Check your spam folder or{' '}
-            <button 
-              onClick={handleSignUp} 
-              className="text-blue-500 hover:underline"
+            <div>
+              <label className="block text-sm font-medium mb-1">Date of Birth *</label>
+              <Input
+                type="date"
+                required
+                value={formData.dateOfBirth}
+                onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1">Password *</label>
+              <Input
+                type="password"
+                required
+                value={formData.password}
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                placeholder="Create a password"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-1">Confirm Password *</label>
+              <Input
+                type="password"
+                required
+                value={formData.confirmPassword}
+                onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                placeholder="Confirm your password"
+              />
+            </div>
+
+            <Button 
+              type="submit" 
+              className="w-full"
               disabled={loading}
             >
-              click here to resend
-            </button>
-          </p>
-        </div>
-      )}
-
-      {step === 3 && (
-        <div className="text-center space-y-4">
-          <h2 className="text-2xl font-bold text-green-600">Account Created Successfully!</h2>
-          <p>You can now sign in with your email and password.</p>
-          <Link href="/login" className="block text-blue-500 hover:underline">
-            Go to Login
-          </Link>
-        </div>
-      )}
+              {loading ? 'Creating Account...' : 'Create Account'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   )
 } 
