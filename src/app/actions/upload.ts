@@ -49,9 +49,7 @@ export async function uploadFile(formData: FormData, userId: string): Promise<Up
     }
 
     // Create file path
-    const timestamp = new Date().getTime();
-    const sanitizedFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const filePath = `uploads/${userId}/${project.id}/${timestamp}_${sanitizedFileName}`;
+    const filePath = `${userId}/${project.id}/${file.name}`;
 
     // Upload file using supabaseAdmin
     const { error: uploadError } = await supabaseAdmin.storage

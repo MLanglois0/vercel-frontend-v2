@@ -84,15 +84,29 @@ export default function Projects() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('No session')
 
-      // Create FormData
+      // Create FormData and upload
       const uploadFormData = new FormData()
       uploadFormData.append('file', selectedFile)
       uploadFormData.append('project_name', formData.project_name)
       uploadFormData.append('book_title', formData.book_title)
       uploadFormData.append('description', formData.description)
 
-      // Pass userId to server action
       await uploadFile(uploadFormData, session.user.id)
+
+      // Add a small delay and verify the project exists
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      
+      // Verify the project exists
+      const { data: projects, error: verifyError } = await supabase
+        .from('projects')
+        .select()
+        .eq('project_name', formData.project_name)
+        .eq('user_id', session.user.id)
+        .single()
+
+      if (verifyError || !projects) {
+        throw new Error('Failed to verify project creation')
+      }
 
       toast.success('Project created successfully')
       setFormData({ project_name: '', book_title: '', description: '' })
