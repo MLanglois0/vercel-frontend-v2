@@ -115,13 +115,14 @@ export default function ProjectDetail() {
               className="flex overflow-x-scroll space-x-4 pb-4 scrollbar-hide"
             >
               {images.map((image) => (
-                <Card key={image.path} className="flex-shrink-0 w-64">
+                <Card key={image.path} className="flex-shrink-0 w-[341px]">
                   <CardContent className="p-2">
                     <div className="relative">
                       <img 
                         src={image.url} 
                         alt={`Storyboard ${image.number}`} 
-                        className="w-full h-40 object-cover rounded" 
+                        className="w-full h-[597px] object-cover rounded" 
+                        loading="lazy"
                       />
                       <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded">
                         {image.number}
@@ -151,7 +152,7 @@ export default function ProjectDetail() {
                   variant="outline"
                   size="icon"
                   className="absolute left-0 top-1/2 transform -translate-y-1/2 bg-background"
-                  onClick={() => scrollContainerRef.current?.scrollBy({ left: -200, behavior: 'smooth' })}
+                  onClick={() => scrollContainerRef.current?.scrollBy({ left: -341, behavior: 'smooth' })}
                 >
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
@@ -159,7 +160,7 @@ export default function ProjectDetail() {
                   variant="outline"
                   size="icon"
                   className="absolute right-0 top-1/2 transform -translate-y-1/2 bg-background"
-                  onClick={() => scrollContainerRef.current?.scrollBy({ left: 200, behavior: 'smooth' })}
+                  onClick={() => scrollContainerRef.current?.scrollBy({ left: 341, behavior: 'smooth' })}
                 >
                   <ChevronRight className="h-4 w-4" />
                 </Button>
