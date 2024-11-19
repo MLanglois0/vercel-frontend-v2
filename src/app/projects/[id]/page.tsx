@@ -168,6 +168,25 @@ export default function ProjectDetail() {
                       </div>
                     </div>
                     
+                    <div className="flex gap-4 items-center mt-2">
+                      <Button 
+                        variant="outline" 
+                        onClick={() => toast.info("B2V Call")}
+                        className="whitespace-nowrap"
+                      >
+                        New Image
+                      </Button>
+                      <div className="flex gap-2 flex-1">
+                        {[1, 2, 3].map((box) => (
+                          <div 
+                            key={box} 
+                            className="border rounded bg-muted/10"
+                            style={{ width: '55px', height: '96px' }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    
                     <div className="space-y-2">
                       {item.audio?.url && (
                         <AudioPlayer
