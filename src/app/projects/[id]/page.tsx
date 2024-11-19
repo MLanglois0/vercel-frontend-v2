@@ -1,17 +1,17 @@
 "use client"
 
-import { useRef, useState, useEffect, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import { useParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
-import { ChevronLeft, ChevronRight, Pause, Play, SkipBack, SkipForward } from "lucide-react"
+import { ChevronLeft, ChevronRight } from "lucide-react"
 import { toast } from 'sonner'
 import { getSignedImageUrls } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { FileText } from "lucide-react"
+import { AudioPlayer } from '@/components/AudioPlayer'
 
 interface Project {
   id: string
@@ -47,9 +47,6 @@ export default function ProjectDetail() {
   const [isTextDialogOpen, setIsTextDialogOpen] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [sliderValue, setSliderValue] = useState(0)
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null)
-  const audioRefs = useRef<Record<number, HTMLAudioElement>>({})
 
   const fetchProject = useCallback(async () => {
     try {
@@ -118,34 +115,12 @@ export default function ProjectDetail() {
     }
   }
 
-  const handleSliderChange = (value: number[]) => {
+  const handleScrollSliderChange = (value: number[]) => {
     setSliderValue(value[0])
     if (scrollContainerRef.current) {
       const maxScroll = scrollContainerRef.current.scrollWidth - scrollContainerRef.current.clientWidth
       scrollContainerRef.current.scrollLeft = (maxScroll * value[0]) / 100
     }
-  }
-
-  // Audio control functions
-  const handlePlayPause = (itemNumber: number) => {
-    const audio = audioRefs.current[itemNumber]
-    if (!audio) return
-
-    if (isPlaying) {
-      audio.pause()
-      setIsPlaying(false)
-    } else {
-      // Stop any other playing audio
-      Object.values(audioRefs.current).forEach(a => a.pause())
-      audio.play()
-      setIsPlaying(true)
-      setCurrentAudio(audio)
-    }
-  }
-
-  const skipAudio = (seconds: number) => {
-    if (!currentAudio) return
-    currentAudio.currentTime += seconds
   }
 
   if (loading) return <div>Loading...</div>
@@ -195,66 +170,15 @@ export default function ProjectDetail() {
                     
                     <div className="space-y-2">
                       {item.audio?.url && (
-                        <div className="space-y-2">
-                          <audio
-                            ref={el => {
-                              if (el) audioRefs.current[item.number] = el
-                            }}
-                            src={item.audio.url}
-                            className="hidden"
-                            onEnded={() => setIsPlaying(false)}
-                            onPause={() => setIsPlaying(false)}
-                            onPlay={() => setIsPlaying(true)}
-                          />
-                          <div className="flex items-center justify-center gap-2">
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => skipAudio(-10)}
-                              title="Skip back 10 seconds"
-                            >
-                              <SkipBack className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => handlePlayPause(item.number)}
-                              title={isPlaying ? "Pause" : "Play"}
-                            >
-                              {isPlaying && currentAudio === audioRefs.current[item.number] ? (
-                                <Pause className="h-4 w-4" />
-                              ) : (
-                                <Play className="h-4 w-4" />
-                              )}
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={() => skipAudio(10)}
-                              title="Skip forward 10 seconds"
-                            >
-                              <SkipForward className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </div>
+                        <AudioPlayer
+                          audioUrl={item.audio.url}
+                          textContent={item.text?.content}
+                          onViewText={() => {
+                            setSelectedText(item.text?.content || null)
+                            setIsTextDialogOpen(true)
+                          }}
+                        />
                       )}
-
-                      <div className="flex justify-between items-center">
-                        {item.text?.content && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setSelectedText(item.text?.content || null)
-                              setIsTextDialogOpen(true)
-                            }}
-                            className="flex items-center gap-2"
-                          >
-                            <FileText className="h-4 w-4" />
-                            View Text
-                          </Button>
-                        )}
-                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -280,7 +204,7 @@ export default function ProjectDetail() {
                 </Button>
                 <Slider
                   value={[sliderValue]}
-                  onValueChange={handleSliderChange}
+                  onValueChange={handleScrollSliderChange}
                   max={100}
                   step={1}
                   className="w-full"
@@ -308,3 +232,5 @@ export default function ProjectDetail() {
     </div>
   )
 }
+
+
