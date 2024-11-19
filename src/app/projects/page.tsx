@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { PlusCircle, Book } from "lucide-react";
 import { toast } from "sonner";
 import { uploadFile } from '@/app/actions/upload';
+import { useRouter } from 'next/navigation';
 
 interface Project {
   id: string;
@@ -32,6 +33,7 @@ export default function Projects() {
     book_title: '',
     description: '',
   });
+  const router = useRouter();
 
   useEffect(() => {
     fetchProjects();
@@ -216,7 +218,11 @@ export default function Projects() {
                   </div>
                 </CardContent>
                 <CardFooter>
-                  <Button variant="outline" className="w-full">
+                  <Button 
+                    variant="outline" 
+                    className="w-full"
+                    onClick={() => router.push(`/projects/${project.id}`)}
+                  >
                     <Book className="mr-2 h-4 w-4" /> Open Project
                   </Button>
                 </CardFooter>
