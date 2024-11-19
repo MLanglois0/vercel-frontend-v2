@@ -10,6 +10,8 @@ import { Slider } from "@/components/ui/slider"
 import { ChevronLeft, ChevronRight, Pause, Play, SkipBack, SkipForward } from "lucide-react"
 import { toast } from 'sonner'
 import { getSignedImageUrls } from '@/app/actions/storage'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { FileText } from "lucide-react"
 
 interface Project {
   id: string
@@ -20,19 +22,34 @@ interface Project {
   epub_file_path: string
 }
 
-interface StoryboardImage {
-  url: string
+interface StoryboardItem {
   number: number
-  path: string
+  image?: {
+    url: string
+    path: string
+  }
+  audio?: {
+    url: string
+    path: string
+  }
+  text?: {
+    content: string
+    path: string
+  }
 }
 
 export default function ProjectDetail() {
   const params = useParams()
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
-  const [images, setImages] = useState<StoryboardImage[]>([])
+  const [items, setItems] = useState<StoryboardItem[]>([])
+  const [selectedText, setSelectedText] = useState<string | null>(null)
+  const [isTextDialogOpen, setIsTextDialogOpen] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [sliderValue, setSliderValue] = useState(0)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null)
+  const audioRefs = useRef<Record<number, HTMLAudioElement>>({})
 
   const fetchProject = useCallback(async () => {
     try {
@@ -68,10 +85,33 @@ export default function ProjectDetail() {
       if (!session) throw new Error('No session')
 
       // Get signed URLs from server action
-      const signedImages = await getSignedImageUrls(session.user.id, projectId)
-      console.log('Signed image URLs:', signedImages)
+      const signedFiles = await getSignedImageUrls(session.user.id, projectId)
+      console.log('Signed files:', signedFiles)
 
-      setImages(signedImages)
+      // Group files by number
+      const groupedItems = signedFiles.reduce((acc, file) => {
+        const number = file.number
+        if (!acc[number]) acc[number] = { number }
+        
+        if (file.type === 'image') acc[number].image = { url: file.url, path: file.path }
+        if (file.type === 'audio') acc[number].audio = { url: file.url, path: file.path }
+        if (file.type === 'text' && file.content) acc[number].text = { content: file.content, path: file.path }
+        
+        return acc
+      }, {} as Record<number, StoryboardItem>)
+
+      console.log('Grouped items:', groupedItems)
+
+      // Convert to array and sort by number
+      const items = Object.entries(groupedItems)
+        .map(([num, item]) => ({
+          ...item,
+          number: parseInt(num)
+        }))
+        .sort((a, b) => a.number - b.number)
+
+      console.log('Final items array:', items)
+      setItems(items)
     } catch (error) {
       console.error('Error fetching storyboard images:', error)
       toast.error('Failed to load storyboard images')
@@ -84,6 +124,28 @@ export default function ProjectDetail() {
       const maxScroll = scrollContainerRef.current.scrollWidth - scrollContainerRef.current.clientWidth
       scrollContainerRef.current.scrollLeft = (maxScroll * value[0]) / 100
     }
+  }
+
+  // Audio control functions
+  const handlePlayPause = (itemNumber: number) => {
+    const audio = audioRefs.current[itemNumber]
+    if (!audio) return
+
+    if (isPlaying) {
+      audio.pause()
+      setIsPlaying(false)
+    } else {
+      // Stop any other playing audio
+      Object.values(audioRefs.current).forEach(a => a.pause())
+      audio.play()
+      setIsPlaying(true)
+      setCurrentAudio(audio)
+    }
+  }
+
+  const skipAudio = (seconds: number) => {
+    if (!currentAudio) return
+    currentAudio.currentTime += seconds
   }
 
   if (loading) return <div>Loading...</div>
@@ -108,45 +170,97 @@ export default function ProjectDetail() {
 
       <div className="space-y-4">
         <h3 className="text-2xl font-semibold">Storyboard</h3>
-        {images.length > 0 ? (
+        {items.length > 0 ? (
           <div className="relative">
             <div
               ref={scrollContainerRef}
               className="flex overflow-x-scroll space-x-4 pb-4 scrollbar-hide"
             >
-              {images.map((image) => (
-                <Card key={image.path} className="flex-shrink-0 w-[341px]">
-                  <CardContent className="p-2">
+              {items.map((item) => (
+                <Card key={item.number} className="flex-shrink-0 w-[341px]">
+                  <CardContent className="p-2 space-y-2">
                     <div className="relative">
-                      <img 
-                        src={image.url} 
-                        alt={`Storyboard ${image.number}`} 
-                        className="w-full h-[597px] object-cover rounded" 
-                        loading="lazy"
-                      />
+                      {item.image?.url && (
+                        <img 
+                          src={item.image.url} 
+                          alt={`Storyboard ${item.number}`} 
+                          className="w-full h-[597px] object-cover rounded" 
+                          loading="lazy"
+                        />
+                      )}
                       <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded">
-                        {image.number}
+                        {item.number}
                       </div>
                     </div>
-                    <div className="flex justify-between mt-2">
-                      <Button variant="outline" size="icon">
-                        <SkipBack className="h-4 w-4" />
-                      </Button>
-                      <Button variant="outline" size="icon">
-                        <Play className="h-4 w-4" />
-                      </Button>
-                      <Button variant="outline" size="icon">
-                        <Pause className="h-4 w-4" />
-                      </Button>
-                      <Button variant="outline" size="icon">
-                        <SkipForward className="h-4 w-4" />
-                      </Button>
+                    
+                    <div className="space-y-2">
+                      {item.audio?.url && (
+                        <div className="space-y-2">
+                          <audio
+                            ref={el => {
+                              if (el) audioRefs.current[item.number] = el
+                            }}
+                            src={item.audio.url}
+                            className="hidden"
+                            onEnded={() => setIsPlaying(false)}
+                            onPause={() => setIsPlaying(false)}
+                            onPlay={() => setIsPlaying(true)}
+                          />
+                          <div className="flex items-center justify-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              onClick={() => skipAudio(-10)}
+                              title="Skip back 10 seconds"
+                            >
+                              <SkipBack className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              onClick={() => handlePlayPause(item.number)}
+                              title={isPlaying ? "Pause" : "Play"}
+                            >
+                              {isPlaying && currentAudio === audioRefs.current[item.number] ? (
+                                <Pause className="h-4 w-4" />
+                              ) : (
+                                <Play className="h-4 w-4" />
+                              )}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              onClick={() => skipAudio(10)}
+                              title="Skip forward 10 seconds"
+                            >
+                              <SkipForward className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex justify-between items-center">
+                        {item.text?.content && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setSelectedText(item.text?.content || null)
+                              setIsTextDialogOpen(true)
+                            }}
+                            className="flex items-center gap-2"
+                          >
+                            <FileText className="h-4 w-4" />
+                            View Text
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
               ))}
             </div>
-            {images.length > 1 && (
+            {items.length > 1 && (
               <>
                 <Button
                   variant="outline"
@@ -180,6 +294,17 @@ export default function ProjectDetail() {
           </Card>
         )}
       </div>
+
+      <Dialog open={isTextDialogOpen} onOpenChange={setIsTextDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Storyboard Text</DialogTitle>
+          </DialogHeader>
+          <div className="p-4 max-h-[50vh] overflow-y-auto whitespace-pre-wrap">
+            {selectedText}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
