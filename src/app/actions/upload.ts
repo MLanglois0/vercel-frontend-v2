@@ -17,6 +17,15 @@ export async function uploadFile(formData: FormData, userId: string): Promise<Up
   try {
     if (!userId) throw new Error('User ID is required');
 
+    // Debug logging
+    console.log('Creating project with:', {
+      project_name: formData.get('project_name'),
+      book_title: formData.get('book_title'),
+      description: formData.get('description'),
+      user_id: userId,
+      status: 'pending'
+    });
+
     // Create project using supabaseAdmin
     const { data: project, error: projectError } = await supabaseAdmin
       .from('projects')
@@ -29,6 +38,9 @@ export async function uploadFile(formData: FormData, userId: string): Promise<Up
       })
       .select()
       .single();
+
+    // Debug logging
+    console.log('Project creation result:', { project, error: projectError });
 
     if (projectError) throw projectError;
     if (!project) throw new Error('Failed to create project');

@@ -26,13 +26,13 @@ export default function Projects() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNewProject, setShowNewProject] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [formData, setFormData] = useState({
     project_name: '',
     book_title: '',
     description: '',
   });
+  const [isCreating, setIsCreating] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -76,50 +76,44 @@ export default function Projects() {
       return
     }
 
+    if (!selectedFile) {
+      toast.error('Please select an EPUB file')
+      return
+    }
+
     if (!formData.project_name || !formData.book_title) {
       toast.error('Please fill out all required fields')
       return
     }
 
-    setUploading(true)
+    setIsCreating(true)
+    const loadingToast = toast.loading('Creating your project...')
+
     try {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('No session')
 
-      // Create FormData and upload
+      // Create FormData for upload
       const uploadFormData = new FormData()
       uploadFormData.append('file', selectedFile)
       uploadFormData.append('project_name', formData.project_name)
       uploadFormData.append('book_title', formData.book_title)
-      uploadFormData.append('description', formData.description)
+      uploadFormData.append('description', formData.description || '')
 
       await uploadFile(uploadFormData, session.user.id)
-
-      // Add a small delay and verify the project exists
-      await new Promise(resolve => setTimeout(resolve, 1000))
       
-      // Verify the project exists
-      const { data: projects, error: verifyError } = await supabase
-        .from('projects')
-        .select()
-        .eq('project_name', formData.project_name)
-        .eq('user_id', session.user.id)
-        .single()
-
-      if (verifyError || !projects) {
-        throw new Error('Failed to verify project creation')
-      }
-
+      toast.dismiss(loadingToast)
       toast.success('Project created successfully')
       setFormData({ project_name: '', book_title: '', description: '' })
       setSelectedFile(null)
       setShowNewProject(false)
-      await fetchProjects()
+      await fetchProjects() // Only fetch after everything is complete
     } catch (error) {
       console.error('Error:', error)
+      toast.dismiss(loadingToast)
       toast.error('Failed to create project')
     } finally {
-      setUploading(false)
+      setIsCreating(false)
     }
   }
 
@@ -174,7 +168,7 @@ export default function Projects() {
                   type="file"
                   accept=".epub"
                   onChange={handleFileSelect}
-                  disabled={uploading}
+                  disabled={isCreating}
                   required
                   className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"
                 />
@@ -184,18 +178,13 @@ export default function Projects() {
                   Selected file: {selectedFile.name}
                 </p>
               )}
-              {uploading && <p className="text-sm text-gray-500 mt-2">Creating project...</p>}
+              {isCreating && <p className="text-sm text-gray-500 mt-2">Creating project...</p>}
             </div>
             <Button 
-              type="submit" 
-              disabled={uploading || !selectedFile || !formData.project_name || !formData.book_title}
-              className={`w-full ${
-                uploading || !selectedFile || !formData.project_name || !formData.book_title
-                  ? ''  // default button color
-                  : 'bg-green-600 hover:bg-green-700'  // green when ready
-              }`}
+              onClick={handleCreateProject} 
+              disabled={isCreating}
             >
-              {uploading ? 'Creating Project...' : 'Create Project'}
+              {isCreating ? 'Creating...' : 'Create Project'}
             </Button>
           </form>
         </Card>
