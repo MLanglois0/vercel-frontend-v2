@@ -1,8 +1,9 @@
 'use server'
 
-import { PutObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3'
+import { PutObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { r2Client, R2_BUCKET_NAME } from '@/lib/r2'
+import { getUserFriendlyError } from '@/lib/error-handler'
 
 interface SignedFileResponse {
   url: string
@@ -10,6 +11,7 @@ interface SignedFileResponse {
   path: string
   type: FileType
   content?: string
+  version?: number
 }
 
 type FileType = 'image' | 'audio' | 'text' | 'epub'
@@ -17,6 +19,11 @@ type FileType = 'image' | 'audio' | 'text' | 'epub'
 interface UploadResult {
   url: string
   path: string
+}
+
+interface SaveImageHistoryParams {
+  originalPath: string
+  version: number
 }
 
 export async function listProjectFiles(userId: string, projectId: string) {
@@ -66,37 +73,63 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
         // Extract number based on file type
         let number: number
         if (type === 'image') {
-          // For images: badradio_chapter0_4_image4.jpg -> extracts 4
-          const match = fileName.match(/chapter0_(\d+)_image/)
-          number = match ? parseInt(match[1]) : 0
-          console.log('Image number:', number, 'from', fileName)
+          // Check if it's a saved version
+          const savedMatch = fileName.match(/_(\d+)sbsave\.jpg$/)
+          if (savedMatch) {
+            // Extract the version number
+            const version = parseInt(savedMatch[1])
+            const baseMatch = fileName.match(/chapter0_(\d+)_image/)
+            number = baseMatch ? parseInt(baseMatch[1]) : 0
+            
+            const getCommand = new GetObjectCommand({
+              Bucket: R2_BUCKET_NAME,
+              Key: file.Key,
+            })
+            const url = await getSignedUrl(r2Client, getCommand, { expiresIn: 3600 })
+            
+            console.log('Found saved version:', { version, url, fileName })
+            
+            // Add version info to the response
+            return {
+              url,
+              number,
+              path: file.Key,
+              type,
+              version
+            }
+          } else {
+            // Regular image processing
+            const match = fileName.match(/chapter0_(\d+)_image/)
+            number = match ? parseInt(match[1]) : 0
+            console.log('Found main image:', { number, fileName })
+          }
         } else if (type === 'audio') {
-          // For audio: badradio_en_chapter0_4_chunk4.mp3 -> extracts 4
           const match = fileName.match(/chapter0_(\d+)_/)
           number = match ? parseInt(match[1]) : 0
-          console.log('Audio number:', number, 'from', fileName)
         } else if (type === 'text') {
-          // For text: badradio_en_chapter0_4_chunk4.txt -> extracts 4
           const match = fileName.match(/chapter0_(\d+)_/)
           number = match ? parseInt(match[1]) : 0
-          console.log('Text number:', number, 'from', fileName)
         } else {
           number = 0
         }
 
+        // Get text content if it's a text file
+        let content: string | undefined
+        if (type === 'text') {
+          const getCommand = new GetObjectCommand({
+            Bucket: R2_BUCKET_NAME,
+            Key: file.Key,
+          })
+          const response = await r2Client.send(getCommand)
+          content = await response.Body?.transformToString()
+        }
+
+        // Generate signed URL for all file types
         const getCommand = new GetObjectCommand({
           Bucket: R2_BUCKET_NAME,
           Key: file.Key,
         })
-
         const url = await getSignedUrl(r2Client, getCommand, { expiresIn: 3600 })
-
-        // Get text content if it's a text file
-        let content: string | undefined
-        if (type === 'text') {
-          const response = await r2Client.send(getCommand)
-          content = await response.Body?.transformToString()
-        }
 
         return {
           url,
@@ -164,5 +197,33 @@ export async function deleteProjectFile(path: string): Promise<void> {
   } catch (error) {
     console.error('Error deleting file:', error)
     throw error
+  }
+}
+
+export async function saveImageHistory({ originalPath, version }: SaveImageHistoryParams) {
+  if (!originalPath) throw new Error('Original path is required')
+  if (version < 0) throw new Error('Version must be a positive number')
+
+  // Extract the base filename without extension
+  const pathParts = originalPath.split('.')
+  const ext = pathParts.pop()
+  const basePath = pathParts.join('.')
+  
+  // Create the new filename with _<version>sbsave suffix
+  const newPath = `${basePath}_${version}sbsave.${ext}`
+
+  // Copy the file in R2 using existing s3Client
+  const copyCommand = new CopyObjectCommand({
+    Bucket: process.env.R2_BUCKET_NAME,
+    CopySource: `${process.env.R2_BUCKET_NAME}/${originalPath}`,
+    Key: newPath,
+  })
+
+  try {
+    await r2Client.send(copyCommand)
+    return { newPath }
+  } catch (error) {
+    console.error('Error saving image history:', error)
+    throw new Error(getUserFriendlyError(error))
   }
 } 

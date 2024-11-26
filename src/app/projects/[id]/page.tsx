@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import { toast } from 'sonner'
-import { getSignedImageUrls, deleteProjectFile } from '@/app/actions/storage'
+import { getSignedImageUrls, deleteProjectFile, saveImageHistory } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
 import { getUserFriendlyError } from '@/lib/error-handler'
@@ -29,6 +29,11 @@ interface StoryboardItem {
   image?: {
     url: string
     path: string
+    savedVersions?: {
+      url: string
+      path: string
+      version: number
+    }[]
   }
   audio?: {
     url: string
@@ -82,12 +87,28 @@ export default function ProjectDetail() {
         }
         
         if (file.type === 'image') {
-          // Match number before .jpg
-          const match = file.path.match(/(\d+)\.jpg$/)
-          if (match) {
-            const imageNumber = parseInt(match[1])
-            acc[imageNumber].image = { url: file.url, path: file.path }
-            console.log(`Added image to group ${imageNumber}:`, file.path)
+          if (file.version !== undefined) {
+            // This is a saved version
+            if (!acc[number].image) {
+              acc[number].image = { url: '', path: '', savedVersions: [] }
+            }
+            if (!acc[number].image.savedVersions) {
+              acc[number].image.savedVersions = []
+            }
+            console.log('Adding saved version:', file)
+            acc[number].image.savedVersions.push({
+              url: file.url,
+              path: file.path,
+              version: file.version
+            })
+          } else {
+            // This is the main image
+            acc[number].image = {
+              ...acc[number].image,
+              url: file.url,
+              path: file.path,
+            }
+            console.log('Adding main image:', file)
           }
         }
         if (file.type === 'audio') {
@@ -216,6 +237,62 @@ export default function ProjectDetail() {
     }
   }
 
+  const handleNewImage = async (item: StoryboardItem) => {
+    try {
+      console.log('New Image button clicked for item:', item)
+      
+      if (!item.image?.path) {
+        console.error('No image path found in item:', item)
+        throw new Error('No image path found')
+      }
+      
+      // Check if we already have 3 saved versions
+      const savedVersions = item.image.savedVersions || []
+      console.log('Current saved versions:', savedVersions)
+      
+      if (savedVersions.length >= 3) {
+        console.log('Maximum versions reached:', savedVersions.length)
+        // Calculate position based on card width (341px) and item number, starting from 0
+        const horizontalOffset = item.number * 341 // Multiply by card width
+        toast('Maximum versions reached', {
+          description: 'Limited to 3 image generations. Please contact support if you need assistance.',
+          position: 'bottom-right',
+          duration: 4000,
+          style: {
+            position: 'fixed',
+            left: `${horizontalOffset}px`,
+            bottom: '50%',
+            transform: 'translate(-50%, 50%)',
+            marginLeft: '410px' // Full card width to move it right
+          }
+        })
+        return
+      }
+
+      // Save current image as historical version
+      const newVersion = savedVersions.length
+      console.log('Saving new version:', newVersion, 'for path:', item.image.path)
+      
+      const result = await saveImageHistory({
+        originalPath: item.image.path,
+        version: newVersion
+      })
+      console.log('Save history result:', result)
+
+      // For now, just log the backend command for new image
+      console.log('Backend command to generate replacement image')
+
+      // Refresh the project data
+      console.log('Refreshing project data...')
+      await fetchProject()
+      console.log('Project data refreshed')
+
+    } catch (error) {
+      console.error('Error in handleNewImage:', error)
+      toast.error(getUserFriendlyError(error))
+    }
+  }
+
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
 
@@ -274,15 +351,24 @@ export default function ProjectDetail() {
                       <div className="flex gap-4 items-center mt-2">
                         <Button 
                           variant="outline" 
-                          onClick={() => toast.info("B2V Call")}
+                          onClick={() => handleNewImage(item)}
                           className="whitespace-nowrap"
                         >
                           New Image
                         </Button>
                         <div className="flex gap-2 flex-1">
-                          {[1, 2, 3].map((box) => (
+                          {item.image?.savedVersions?.map((version) => (
+                            <img 
+                              key={version.version}
+                              src={version.url}
+                              alt={`Version ${version.version}`}
+                              className="w-[55px] h-[96px] object-cover rounded border bg-muted/10"
+                              style={{ width: '55px', height: '96px' }}
+                            />
+                          ))}
+                          {Array.from({ length: 3 - (item.image?.savedVersions?.length || 0) }).map((_, i) => (
                             <div 
-                              key={box} 
+                              key={i} 
                               className="border rounded bg-muted/10"
                               style={{ width: '55px', height: '96px' }}
                             />

@@ -64,6 +64,8 @@
      - Prefer server components and Next.js SSR features.
      - Use 'use client' only for Web API access in small components.
      - Avoid using 'use client' for data fetching or state management.
+  4. We are making a large project, so unless specifically told otherwise, do not remove existing functionality. Whenever possible, preserve existing functionality and implement the new features on top of the existing ones.
+  5. make sure to take advantage of the existing code and libraries. Do not make redundant code and unnecessary changes
   
   Refer to Next.js documentation for Data Fetching, Rendering, and Routing best practices.
   
