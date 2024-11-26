@@ -12,6 +12,7 @@ import { toast } from 'sonner'
 import { getSignedImageUrls } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
+import { getUserFriendlyError } from '@/lib/error-handler'
 
 interface Project {
   id: string
@@ -63,10 +64,93 @@ export default function ProjectDetail() {
       if (!project) throw new Error('Project not found')
 
       setProject(project)
-      await fetchStoryboardImages(project.id)
+
+      // Get signed URLs from R2 through server action
+      const signedFiles = await getSignedImageUrls(session.user.id, project.id)
+      console.log('Signed files:', signedFiles) // Debug log
+
+      // Group files by number
+      const groupedItems = signedFiles.reduce((acc, file) => {
+        const number = file.number
+        if (!acc[number]) {
+          acc[number] = { number }
+        }
+        
+        if (file.type === 'image') {
+          // Match number before .jpg
+          const match = file.path.match(/(\d+)\.jpg$/)
+          if (match) {
+            const imageNumber = parseInt(match[1])
+            acc[imageNumber].image = { url: file.url, path: file.path }
+            console.log(`Added image to group ${imageNumber}:`, file.path)
+          }
+        }
+        if (file.type === 'audio') {
+          // Match number before .mp3
+          const match = file.path.match(/(\d+)\.mp3$/)
+          if (match) {
+            const audioNumber = parseInt(match[1])
+            acc[audioNumber].audio = { url: file.url, path: file.path }
+            console.log(`Added audio to group ${audioNumber}:`, file.path)
+          }
+        }
+        if (file.type === 'text' && file.content) {
+          // Match number before .txt
+          const match = file.path.match(/(\d+)\.txt$/)
+          if (match) {
+            const textNumber = parseInt(match[1])
+            acc[textNumber].text = { content: file.content, path: file.path }
+            console.log(`Added text to group ${textNumber}:`, file.path)
+          }
+        }
+        
+        return acc
+      }, {} as Record<number, StoryboardItem>)
+
+      // Log the initial grouping
+      console.log('Initial grouping:', groupedItems)
+
+      // Validate the grouped items
+      const cleanedGroupedItems = Object.entries(groupedItems).reduce<Record<number, StoryboardItem>>((acc, [key, value]) => {
+        const number = parseInt(key)
+        
+        // Skip the epub file (number 0)
+        if (number === 0) {
+          acc[number] = value
+          return acc
+        }
+
+        // Validate that all required files are present
+        if (!value.text) {
+          throw new Error(`Missing text file for storyboard item ${number}`)
+        }
+        if (!value.image) {
+          throw new Error(`Missing image file for storyboard item ${number}`)
+        }
+        if (!value.audio) {
+          throw new Error(`Missing audio file for storyboard item ${number}`)
+        }
+
+        acc[number] = value
+        return acc
+      }, {})
+
+      // Log the final grouping
+      console.log('Final cleaned grouping:', cleanedGroupedItems)
+
+      // Convert to array and sort
+      const items = Object.entries(cleanedGroupedItems)
+        .map(([num, item]) => ({
+          ...item,
+          number: parseInt(num)
+        }))
+        .sort((a, b) => a.number - b.number)
+
+      console.log('Final sorted items:', items) // Debug log
+      setItems(items)
     } catch (error) {
       console.error('Error fetching project:', error)
-      toast.error('Failed to load project')
+      toast.error(getUserFriendlyError(error))
     } finally {
       setLoading(false)
     }
@@ -76,45 +160,6 @@ export default function ProjectDetail() {
     fetchProject()
   }, [fetchProject])
 
-  async function fetchStoryboardImages(projectId: string) {
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) throw new Error('No session')
-
-      // Get signed URLs from server action
-      const signedFiles = await getSignedImageUrls(session.user.id, projectId)
-      console.log('Signed files:', signedFiles)
-
-      // Group files by number
-      const groupedItems = signedFiles.reduce((acc, file) => {
-        const number = file.number
-        if (!acc[number]) acc[number] = { number }
-        
-        if (file.type === 'image') acc[number].image = { url: file.url, path: file.path }
-        if (file.type === 'audio') acc[number].audio = { url: file.url, path: file.path }
-        if (file.type === 'text' && file.content) acc[number].text = { content: file.content, path: file.path }
-        
-        return acc
-      }, {} as Record<number, StoryboardItem>)
-
-      console.log('Grouped items:', groupedItems)
-
-      // Convert to array and sort by number
-      const items = Object.entries(groupedItems)
-        .map(([num, item]) => ({
-          ...item,
-          number: parseInt(num)
-        }))
-        .sort((a, b) => a.number - b.number)
-
-      console.log('Final items array:', items)
-      setItems(items)
-    } catch (error) {
-      console.error('Error fetching storyboard images:', error)
-      toast.error('Failed to load storyboard images')
-    }
-  }
-
   const handleScrollSliderChange = (value: number[]) => {
     setSliderValue(value[0])
     if (scrollContainerRef.current) {
@@ -122,6 +167,9 @@ export default function ProjectDetail() {
       scrollContainerRef.current.scrollLeft = (maxScroll * value[0]) / 100
     }
   }
+
+  // Check if there are any image files
+  const hasImages = items.some(item => item.image?.url)
 
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
@@ -145,62 +193,64 @@ export default function ProjectDetail() {
 
       <div className="space-y-4">
         <h3 className="text-2xl font-semibold">Storyboard</h3>
-        {items.length > 0 ? (
+        {hasImages ? (
           <div className="relative">
             <div
               ref={scrollContainerRef}
               className="flex overflow-x-scroll space-x-4 pb-4 scrollbar-hide"
             >
               {items.map((item) => (
-                <Card key={item.number} className="flex-shrink-0 w-[341px]">
-                  <CardContent className="p-2 space-y-2">
-                    <div className="relative">
-                      {item.image?.url && (
-                        <img 
-                          src={item.image.url} 
-                          alt={`Storyboard ${item.number}`} 
-                          className="w-full h-[597px] object-cover rounded" 
-                          loading="lazy"
-                        />
-                      )}
-                      <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded">
-                        {item.number}
-                      </div>
-                    </div>
-                    
-                    <div className="flex gap-4 items-center mt-2">
-                      <Button 
-                        variant="outline" 
-                        onClick={() => toast.info("B2V Call")}
-                        className="whitespace-nowrap"
-                      >
-                        New Image
-                      </Button>
-                      <div className="flex gap-2 flex-1">
-                        {[1, 2, 3].map((box) => (
-                          <div 
-                            key={box} 
-                            className="border rounded bg-muted/10"
-                            style={{ width: '55px', height: '96px' }}
+                item.image?.url && (
+                  <Card key={item.number} className="flex-shrink-0 w-[341px]">
+                    <CardContent className="p-2 space-y-2">
+                      <div className="relative">
+                        {item.image?.url && (
+                          <img 
+                            src={item.image.url} 
+                            alt={`Storyboard ${item.number}`} 
+                            className="w-full h-[597px] object-cover rounded" 
+                            loading="lazy"
                           />
-                        ))}
+                        )}
+                        <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded">
+                          {item.number}
+                        </div>
                       </div>
-                    </div>
-                    
-                    <div className="space-y-2">
-                      {item.audio?.url && (
-                        <AudioPlayer
-                          audioUrl={item.audio.url}
-                          textContent={item.text?.content}
-                          onViewText={() => {
-                            setSelectedText(item.text?.content || null)
-                            setIsTextDialogOpen(true)
-                          }}
-                        />
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
+                      
+                      <div className="flex gap-4 items-center mt-2">
+                        <Button 
+                          variant="outline" 
+                          onClick={() => toast.info("B2V Call")}
+                          className="whitespace-nowrap"
+                        >
+                          New Image
+                        </Button>
+                        <div className="flex gap-2 flex-1">
+                          {[1, 2, 3].map((box) => (
+                            <div 
+                              key={box} 
+                              className="border rounded bg-muted/10"
+                              style={{ width: '55px', height: '96px' }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-2">
+                        {item.audio?.url && (
+                          <AudioPlayer
+                            audioUrl={item.audio.url}
+                            textContent={item.text?.content}
+                            onViewText={() => {
+                              setSelectedText(item.text?.content || null)
+                              setIsTextDialogOpen(true)
+                            }}
+                          />
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )
               ))}
             </div>
             {items.length > 1 && (

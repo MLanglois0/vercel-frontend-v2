@@ -8,8 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { PlusCircle, Book } from "lucide-react";
 import { toast } from "sonner";
-import { uploadFile } from '@/app/actions/upload';
+import { uploadFile } from '@/app/actions/upload'
 import { useRouter } from 'next/navigation';
+import { getUserFriendlyError } from '@/lib/error-handler'
 
 interface Project {
   id: string;
@@ -50,10 +51,10 @@ export default function Projects() {
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('Error fetching projects:', error);
-      toast.error('Failed to load projects');
+      console.error('Error fetching projects:', error)
+      toast.error(getUserFriendlyError(error))
     } else {
-      setProjects(data || []);
+      setProjects(data || [])
     }
     setLoading(false);
   }
@@ -107,11 +108,11 @@ export default function Projects() {
       setFormData({ project_name: '', book_title: '', description: '' })
       setSelectedFile(null)
       setShowNewProject(false)
-      await fetchProjects() // Only fetch after everything is complete
+      await fetchProjects()
     } catch (error) {
       console.error('Error:', error)
       toast.dismiss(loadingToast)
-      toast.error('Failed to create project')
+      toast.error(getUserFriendlyError(error))
     } finally {
       setIsCreating(false)
     }
