@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { AudioPlayer } from '@/components/AudioPlayer'
 import { getUserFriendlyError } from '@/lib/error-handler'
 import { Input } from "@/components/ui/input"
+import Image from 'next/image'
 
 interface Project {
   id: string
@@ -58,6 +59,7 @@ export default function ProjectDetail() {
   const [confirmProjectName, setConfirmProjectName] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
   const router = useRouter()
+  const [generatingImages, setGeneratingImages] = useState<Set<number>>(new Set())
 
   const fetchProject = useCallback(async () => {
     try {
@@ -239,6 +241,9 @@ export default function ProjectDetail() {
 
   const handleNewImage = async (item: StoryboardItem) => {
     try {
+      // Prevent duplicate generations
+      if (generatingImages.has(item.number)) return
+      
       console.log('New Image button clicked for item:', item)
       
       if (!item.image?.path) {
@@ -269,6 +274,9 @@ export default function ProjectDetail() {
         return
       }
 
+      // Set loading state for this specific item
+      setGeneratingImages(prev => new Set(prev).add(item.number))
+
       // Save current image as historical version
       const newVersion = savedVersions.length
       console.log('Saving new version:', newVersion, 'for path:', item.image.path)
@@ -279,7 +287,7 @@ export default function ProjectDetail() {
       })
       console.log('Save history result:', result)
 
-      // For now, just log the backend command for new image
+      // Your backend command for new image generation
       console.log('Backend command to generate replacement image')
 
       // Refresh the project data
@@ -290,6 +298,13 @@ export default function ProjectDetail() {
     } catch (error) {
       console.error('Error in handleNewImage:', error)
       toast.error(getUserFriendlyError(error))
+    } finally {
+      // Clear loading state for this item
+      setGeneratingImages(prev => {
+        const next = new Set(prev)
+        next.delete(item.number)
+        return next
+      })
     }
   }
 
@@ -336,12 +351,16 @@ export default function ProjectDetail() {
                     <CardContent className="p-2 space-y-2">
                       <div className="relative">
                         {item.image?.url && (
-                          <img 
-                            src={item.image.url} 
-                            alt={`Storyboard ${item.number}`} 
-                            className="w-full h-[597px] object-cover rounded" 
-                            loading="lazy"
-                          />
+                          <div className="relative w-full h-[597px]">
+                            <Image 
+                              src={item.image.url} 
+                              alt={`Storyboard ${item.number}`}
+                              fill
+                              className="object-cover rounded" 
+                              priority={item.number <= 2}
+                              sizes="(max-width: 768px) 100vw, 341px"
+                            />
+                          </div>
                         )}
                         <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded">
                           {item.number}
@@ -353,18 +372,26 @@ export default function ProjectDetail() {
                           variant="outline" 
                           onClick={() => handleNewImage(item)}
                           className="whitespace-nowrap"
+                          disabled={generatingImages.has(item.number)}
                         >
-                          New Image
+                          {generatingImages.has(item.number) 
+                            ? 'Working...' 
+                            : item.image?.savedVersions?.length === 3 
+                              ? 'Max Versions' 
+                              : 'New Image'
+                          }
                         </Button>
                         <div className="flex gap-2 flex-1">
                           {item.image?.savedVersions?.map((version) => (
-                            <img 
-                              key={version.version}
-                              src={version.url}
-                              alt={`Version ${version.version}`}
-                              className="w-[55px] h-[96px] object-cover rounded border bg-muted/10"
-                              style={{ width: '55px', height: '96px' }}
-                            />
+                            <div key={version.version} className="relative w-[55px] h-[96px]">
+                              <Image 
+                                src={version.url}
+                                alt={`Version ${version.version}`}
+                                fill
+                                className="object-cover rounded border bg-muted/10"
+                                sizes="55px"
+                              />
+                            </div>
                           ))}
                           {Array.from({ length: 3 - (item.image?.savedVersions?.length || 0) }).map((_, i) => (
                             <div 
