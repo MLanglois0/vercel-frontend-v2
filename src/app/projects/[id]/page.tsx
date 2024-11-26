@@ -1,7 +1,7 @@
 "use client"
 
 import { useRef, useState, useCallback, useEffect } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -9,10 +9,11 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import { toast } from 'sonner'
-import { getSignedImageUrls } from '@/app/actions/storage'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { getSignedImageUrls, deleteProjectFile } from '@/app/actions/storage'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
 import { getUserFriendlyError } from '@/lib/error-handler'
+import { Input } from "@/components/ui/input"
 
 interface Project {
   id: string
@@ -48,6 +49,10 @@ export default function ProjectDetail() {
   const [isTextDialogOpen, setIsTextDialogOpen] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [sliderValue, setSliderValue] = useState(0)
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [confirmProjectName, setConfirmProjectName] = useState('')
+  const [isDeleting, setIsDeleting] = useState(false)
+  const router = useRouter()
 
   const fetchProject = useCallback(async () => {
     try {
@@ -171,6 +176,46 @@ export default function ProjectDetail() {
   // Check if there are any image files
   const hasImages = items.some(item => item.image?.url)
 
+  const handleDeleteProject = async () => {
+    if (!project || confirmProjectName !== project.project_name) return
+    
+    setIsDeleting(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No session')
+
+      // Delete all files in the project directory
+      const projectPath = `${session.user.id}/${project.id}/`
+      
+      // Get all files in the project directory
+      const { data: files } = await supabase
+        .storage
+        .from('projects')
+        .list(projectPath)
+
+      if (files && files.length > 0) {
+        // Delete all files in the directory
+        await Promise.all(
+          files.map(file => deleteProjectFile(`${projectPath}${file.name}`))
+        )
+      }
+
+      // Delete project from database
+      const { error } = await supabase
+        .from('projects')
+        .delete()
+        .eq('id', project.id)
+
+      if (error) throw error
+
+      toast.success('Project deleted successfully')
+      router.push('/projects')
+    } catch (error) {
+      toast.error(getUserFriendlyError(error))
+      setIsDeleting(false)
+    }
+  }
+
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
 
@@ -180,13 +225,22 @@ export default function ProjectDetail() {
         <h1 className="text-3xl font-bold">{project.project_name}</h1>
         <div className="flex justify-between items-center">
           <h2 className="text-xl font-semibold">{project.book_title}</h2>
-          <Badge variant={
-            project.status === 'completed' ? 'default' : 
-            project.status === 'in_progress' ? 'secondary' : 
-            'outline'
-          }>
-            {project.status}
-          </Badge>
+          <div className="flex gap-4 items-center">
+            <Badge variant={
+              project.status === 'completed' ? 'default' : 
+              project.status === 'in_progress' ? 'secondary' : 
+              'outline'
+            }>
+              {project.status}
+            </Badge>
+            <Button 
+              variant="destructive" 
+              className="bg-black hover:bg-gray-800"
+              onClick={() => setIsDeleteDialogOpen(true)}
+            >
+              Delete Project
+            </Button>
+          </div>
         </div>
         <p className="text-muted-foreground">{project.description}</p>
       </div>
@@ -295,6 +349,33 @@ export default function ProjectDetail() {
           </DialogHeader>
           <div className="p-4 max-h-[50vh] overflow-y-auto whitespace-pre-wrap">
             {selectedText}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Project</DialogTitle>
+            <DialogDescription>
+              This action cannot be undone. Please type <strong>{project?.project_name}</strong> to confirm.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <Input
+              placeholder="Type project name to confirm"
+              value={confirmProjectName}
+              onChange={(e) => setConfirmProjectName(e.target.value)}
+            />
+            <DialogFooter>
+              <Button
+                variant="destructive"
+                disabled={confirmProjectName !== project?.project_name || isDeleting}
+                onClick={handleDeleteProject}
+              >
+                {isDeleting ? 'Deleting...' : 'Delete Project'}
+              </Button>
+            </DialogFooter>
           </div>
         </DialogContent>
       </Dialog>
