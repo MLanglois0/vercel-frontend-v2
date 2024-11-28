@@ -7,9 +7,9 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
-import { ChevronLeft, ChevronRight } from "lucide-react"
+import { ChevronLeft, ChevronRight, FileText } from "lucide-react"
 import { toast } from 'sonner'
-import { getSignedImageUrls, deleteProjectFile, saveImageHistory } from '@/app/actions/storage'
+import { getSignedImageUrls, deleteProjectFile, saveImageHistory, saveAudioHistory } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
 import { getUserFriendlyError } from '@/lib/error-handler'
@@ -39,6 +39,10 @@ interface StoryboardItem {
   audio?: {
     url: string
     path: string
+    savedVersion?: {
+      url: string
+      path: string
+    }
   }
   text?: {
     content: string
@@ -60,6 +64,10 @@ export default function ProjectDetail() {
   const [isDeleting, setIsDeleting] = useState(false)
   const router = useRouter()
   const [generatingImages, setGeneratingImages] = useState<Set<number>>(new Set())
+  const [generatingAudio, setGeneratingAudio] = useState<Set<number>>(new Set())
+  const [primaryTrack, setPrimaryTrack] = useState<1 | 2>(1)
+  const [hasSecondTrack, setHasSecondTrack] = useState(false)
+  const [switchingTrack, setSwitchingTrack] = useState<1 | 2 | null>(null)
 
   const fetchProject = useCallback(async () => {
     try {
@@ -114,12 +122,19 @@ export default function ProjectDetail() {
           }
         }
         if (file.type === 'audio') {
-          // Match number before .mp3
-          const match = file.path.match(/(\d+)\.mp3$/)
+          const match = file.path.match(/(\d+)(?:_sbsave)?\.mp3$/)
           if (match) {
             const audioNumber = parseInt(match[1])
-            acc[audioNumber].audio = { url: file.url, path: file.path }
-            console.log(`Added audio to group ${audioNumber}:`, file.path)
+            if (file.path.includes('_sbsave')) {
+              if (!acc[audioNumber].audio) acc[audioNumber].audio = { url: '', path: '' }
+              acc[audioNumber].audio.savedVersion = { url: file.url, path: file.path }
+            } else {
+              acc[audioNumber].audio = { 
+                ...acc[audioNumber].audio,
+                url: file.url, 
+                path: file.path 
+              }
+            }
           }
         }
         if (file.type === 'text' && file.content) {
@@ -142,7 +157,6 @@ export default function ProjectDetail() {
       const cleanedGroupedItems = Object.entries(groupedItems).reduce<Record<number, StoryboardItem>>((acc, [key, value]) => {
         const number = parseInt(key)
         
-        // Skip the epub file (number 0)
         if (number === 0) {
           acc[number] = value
           return acc
@@ -157,6 +171,11 @@ export default function ProjectDetail() {
         }
         if (!value.audio) {
           throw new Error(`Missing audio file for storyboard item ${number}`)
+        }
+
+        // Only update hasSecondTrack based on file presence
+        if (value.audio.savedVersion) {
+          setHasSecondTrack(true)
         }
 
         acc[number] = value
@@ -241,24 +260,17 @@ export default function ProjectDetail() {
 
   const handleNewImage = async (item: StoryboardItem) => {
     try {
-      // Prevent duplicate generations
       if (generatingImages.has(item.number)) return
-      
-      console.log('New Image button clicked for item:', item)
       
       if (!item.image?.path) {
         console.error('No image path found in item:', item)
         throw new Error('No image path found')
       }
       
-      // Check if we already have 3 saved versions
       const savedVersions = item.image.savedVersions || []
-      console.log('Current saved versions:', savedVersions)
       
       if (savedVersions.length >= 3) {
-        console.log('Maximum versions reached:', savedVersions.length)
-        // Calculate position based on card width (341px) and item number, starting from 0
-        const horizontalOffset = item.number * 341 // Multiply by card width
+        const horizontalOffset = item.number * 341
         toast('Maximum versions reached', {
           description: 'Limited to 3 image generations. Please contact support if you need assistance.',
           position: 'bottom-right',
@@ -268,43 +280,114 @@ export default function ProjectDetail() {
             left: `${horizontalOffset}px`,
             bottom: '50%',
             transform: 'translate(-50%, 50%)',
-            marginLeft: '410px' // Full card width to move it right
+            marginLeft: '410px'
           }
         })
         return
       }
 
-      // Set loading state for this specific item
       setGeneratingImages(prev => new Set(prev).add(item.number))
 
       // Save current image as historical version
       const newVersion = savedVersions.length
-      console.log('Saving new version:', newVersion, 'for path:', item.image.path)
       
-      const result = await saveImageHistory({
+      // Call server action to handle file operations
+      await saveImageHistory({
         originalPath: item.image.path,
         version: newVersion
       })
-      console.log('Save history result:', result)
 
-      // Your backend command for new image generation
+      // Your backend command for new image generation will go here
       console.log('Backend command to generate replacement image')
 
-      // Refresh the project data
-      console.log('Refreshing project data...')
       await fetchProject()
-      console.log('Project data refreshed')
-
     } catch (error) {
       console.error('Error in handleNewImage:', error)
       toast.error(getUserFriendlyError(error))
     } finally {
-      // Clear loading state for this item
       setGeneratingImages(prev => {
         const next = new Set(prev)
         next.delete(item.number)
         return next
       })
+    }
+  }
+
+  const handleNewAudio = async (item: StoryboardItem) => {
+    try {
+      if (generatingAudio.has(item.number)) return
+      
+      if (!item.audio?.path) throw new Error('No audio path found')
+      
+      setGeneratingAudio(prev => new Set(prev).add(item.number))
+
+      // Call server action to handle all R2 operations
+      await saveAudioHistory({
+        originalPath: item.audio.path
+      })
+
+      setHasSecondTrack(true)
+      setPrimaryTrack(2)
+      
+      await fetchProject()
+    } catch (error) {
+      console.error('Error in handleNewAudio:', error)
+      toast.error(getUserFriendlyError(error))
+    } finally {
+      setGeneratingAudio(prev => {
+        const next = new Set(prev)
+        next.delete(item.number)
+        return next
+      })
+    }
+  }
+
+  const handleTrackSelection = async (track: 1 | 2, item: StoryboardItem) => {
+    try {
+      if (!hasSecondTrack || track === primaryTrack) return
+      
+      if (!item.audio?.path) throw new Error('No audio path found')
+
+      setSwitchingTrack(track)
+
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No session')
+
+      // Create paths
+      const pathParts = item.audio.path.split('.')
+      const ext = pathParts.pop()
+      const basePath = pathParts.join('.')
+      const sbsavePath = `${basePath}_sbsave.${ext}`
+      const tempPath = `${basePath}_temp.${ext}`
+
+      // Step 1: Move original to temp
+      const { error: moveToTempError } = await supabase.storage
+        .from('projects')
+        .move(item.audio.path, tempPath)
+
+      if (moveToTempError) throw moveToTempError
+
+      // Step 2: Move sbsave to original
+      const { error: moveToOriginalError } = await supabase.storage
+        .from('projects')
+        .move(sbsavePath, item.audio.path)
+
+      if (moveToOriginalError) throw moveToOriginalError
+
+      // Step 3: Move temp to sbsave
+      const { error: moveToSbsaveError } = await supabase.storage
+        .from('projects')
+        .move(tempPath, sbsavePath)
+
+      if (moveToSbsaveError) throw moveToSbsaveError
+
+      setPrimaryTrack(track)
+      await fetchProject()
+    } catch (error) {
+      console.error('Error in handleTrackSelection:', error)
+      toast.error(getUserFriendlyError(error))
+    } finally {
+      setSwitchingTrack(null)
     }
   }
 
@@ -368,19 +451,34 @@ export default function ProjectDetail() {
                       </div>
                       
                       <div className="flex gap-4 items-center mt-2">
-                        <Button 
-                          variant="outline" 
-                          onClick={() => handleNewImage(item)}
-                          className="whitespace-nowrap"
-                          disabled={generatingImages.has(item.number)}
-                        >
-                          {generatingImages.has(item.number) 
-                            ? 'Working...' 
-                            : item.image?.savedVersions?.length === 3 
-                              ? 'Max Versions' 
-                              : 'New Image'
-                          }
-                        </Button>
+                        <div className="flex flex-col gap-2">
+                          {item.text?.content && (
+                            <Button
+                              variant="outline"
+                              onClick={() => {
+                                setSelectedText(item.text?.content || null)
+                                setIsTextDialogOpen(true)
+                              }}
+                              className="flex items-center gap-2 text-sm"
+                            >
+                              <FileText className="h-4 w-4" />
+                              View Text
+                            </Button>
+                          )}
+                          <Button 
+                            variant="outline" 
+                            onClick={() => handleNewImage(item)}
+                            className="whitespace-nowrap text-sm"
+                            disabled={generatingImages.has(item.number)}
+                          >
+                            {generatingImages.has(item.number) 
+                              ? 'Working...' 
+                              : item.image?.savedVersions?.length === 3 
+                                ? 'Max Versions' 
+                                : 'New Image'
+                            }
+                          </Button>
+                        </div>
                         <div className="flex gap-2 flex-1">
                           {item.image?.savedVersions?.map((version) => (
                             <div key={version.version} className="relative w-[55px] h-[96px]">
@@ -405,14 +503,42 @@ export default function ProjectDetail() {
                       
                       <div className="space-y-2">
                         {item.audio?.url && (
-                          <AudioPlayer
-                            audioUrl={item.audio.url}
-                            textContent={item.text?.content}
-                            onViewText={() => {
-                              setSelectedText(item.text?.content || null)
-                              setIsTextDialogOpen(true)
-                            }}
-                          />
+                          <div className="flex items-center gap-2">
+                            <AudioPlayer
+                              audioUrl={item.audio.url}
+                            />
+                            <Button
+                              variant="outline"
+                              onClick={() => handleTrackSelection(1, item)}
+                              disabled={switchingTrack !== null}
+                              className="flex-none text-xs -mt-3 relative"
+                              style={{ width: '100px', height: '70px' }}
+                            >
+                              <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
+                                primaryTrack === 1 ? 'bg-green-500' : 'bg-gray-300'
+                              }`} />
+                              {switchingTrack === 1 ? 'Waiting...' : 'Track 1'}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              onClick={item.audio?.savedVersion ? () => handleTrackSelection(2, item) : () => handleNewAudio(item)}
+                              disabled={generatingAudio.has(item.number) || switchingTrack !== null}
+                              className="flex-none text-xs -mt-3 relative"
+                              style={{ width: '100px', height: '70px' }}
+                            >
+                              <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
+                                primaryTrack === 2 ? 'bg-green-500' : 'bg-gray-300'
+                              }`} />
+                              {switchingTrack === 2 
+                                ? 'Waiting...' 
+                                : generatingAudio.has(item.number)
+                                  ? 'Working...'
+                                  : item.audio?.savedVersion 
+                                    ? 'Track 2' 
+                                    : 'New Audio'
+                              }
+                            </Button>
+                          </div>
                         )}
                       </div>
                     </CardContent>
