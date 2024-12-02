@@ -501,6 +501,8 @@ export default function ProjectDetail() {
                         </div>
                       </div>
                       
+                      <div className="border-t my-2" />
+                      
                       <div className="space-y-2">
                         {item.audio?.url && (
                           <div className="flex items-center gap-2">
@@ -512,7 +514,7 @@ export default function ProjectDetail() {
                               onClick={() => handleTrackSelection(1, item)}
                               disabled={switchingTrack !== null}
                               className="flex-none text-xs -mt-3 relative"
-                              style={{ width: '100px', height: '70px' }}
+                              style={{ width: '90px', height: '70px' }}
                             >
                               <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
                                 primaryTrack === 1 ? 'bg-green-500' : 'bg-gray-300'
@@ -524,7 +526,7 @@ export default function ProjectDetail() {
                               onClick={item.audio?.savedVersion ? () => handleTrackSelection(2, item) : () => handleNewAudio(item)}
                               disabled={generatingAudio.has(item.number) || switchingTrack !== null}
                               className="flex-none text-xs -mt-3 relative"
-                              style={{ width: '100px', height: '70px' }}
+                              style={{ width: '90px', height: '70px' }}
                             >
                               <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
                                 primaryTrack === 2 ? 'bg-green-500' : 'bg-gray-300'
