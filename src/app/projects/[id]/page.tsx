@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
 import { ChevronLeft, ChevronRight, FileText } from "lucide-react"
 import { toast } from 'sonner'
-import { getSignedImageUrls, deleteProjectFile, saveImageHistory, saveAudioHistory } from '@/app/actions/storage'
+import { getSignedImageUrls, deleteProjectFile, saveImageHistory, saveAudioHistory, swapStoryboardImage } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
 import { getUserFriendlyError } from '@/lib/error-handler'
@@ -68,6 +68,7 @@ export default function ProjectDetail() {
   const [primaryTrack, setPrimaryTrack] = useState<1 | 2>(1)
   const [hasSecondTrack, setHasSecondTrack] = useState(false)
   const [switchingTrack, setSwitchingTrack] = useState<1 | 2 | null>(null)
+  const [swappingImages, setSwappingImages] = useState<Set<string>>(new Set())
 
   const fetchProject = useCallback(async () => {
     try {
@@ -439,10 +440,17 @@ export default function ProjectDetail() {
                               src={item.image.url} 
                               alt={`Storyboard ${item.number}`}
                               fill
-                              className="object-cover rounded" 
+                              className={`object-cover rounded ${
+                                swappingImages.has(item.image.path) ? 'opacity-50' : ''
+                              }`}
                               priority={item.number <= 2}
                               sizes="(max-width: 768px) 100vw, 341px"
                             />
+                            {swappingImages.has(item.image.path) && (
+                              <div className="absolute inset-0 flex items-center justify-center">
+                                <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent" />
+                              </div>
+                            )}
                           </div>
                         )}
                         <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded">
@@ -481,14 +489,50 @@ export default function ProjectDetail() {
                         </div>
                         <div className="flex gap-2 flex-1">
                           {item.image?.savedVersions?.map((version) => (
-                            <div key={version.version} className="relative w-[55px] h-[96px]">
+                            <div 
+                              key={version.version} 
+                              className="relative w-[55px] h-[96px] cursor-pointer hover:opacity-80 transition-opacity"
+                              onClick={async () => {
+                                // Skip if already swapping this image
+                                if (swappingImages.has(version.path)) return
+
+                                try {
+                                  // Add both paths to the swapping set
+                                  setSwappingImages(prev => new Set([...prev, version.path, item.image!.path]))
+                                  
+                                  await swapStoryboardImage({
+                                    originalPath: item.image!.path,
+                                    thumbnailPath: version.path
+                                  })
+                                  
+                                  await fetchProject()
+                                } catch (error) {
+                                  console.error('Error swapping images:', error)
+                                  toast.error(getUserFriendlyError(error))
+                                } finally {
+                                  setSwappingImages(prev => {
+                                    const next = new Set(prev)
+                                    next.delete(version.path)
+                                    next.delete(item.image!.path)
+                                    return next
+                                  })
+                                }
+                              }}
+                            >
                               <Image 
                                 src={version.url}
                                 alt={`Version ${version.version}`}
                                 fill
-                                className="object-cover rounded border bg-muted/10"
+                                className={`object-cover rounded border bg-muted/10 ${
+                                  swappingImages.has(version.path) ? 'opacity-50' : ''
+                                }`}
                                 sizes="55px"
                               />
+                              {swappingImages.has(version.path) && (
+                                <div className="absolute inset-0 flex items-center justify-center">
+                                  <div className="animate-spin h-4 w-4 border-2 border-primary rounded-full border-t-transparent" />
+                                </div>
+                              )}
                             </div>
                           ))}
                           {Array.from({ length: 3 - (item.image?.savedVersions?.length || 0) }).map((_, i) => (

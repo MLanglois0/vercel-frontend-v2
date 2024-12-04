@@ -255,3 +255,56 @@ export async function saveAudioHistory({
   }
 }
 
+export async function swapStoryboardImage({
+  originalPath,
+  thumbnailPath
+}: {
+  originalPath: string
+  thumbnailPath: string
+}): Promise<{ success: boolean }> {
+  if (!originalPath || !thumbnailPath) throw new Error('Both original and thumbnail paths are required')
+
+  // Create the temporary original path
+  const tempOriginalPath = originalPath.replace(/(\.\w+)$/, '_temporiginal$1')
+
+  try {
+    // Step 1: Rename the original file to a temporary name
+    await r2Client.send(new CopyObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      CopySource: `${process.env.R2_BUCKET_NAME}/${originalPath}`,
+      Key: tempOriginalPath,
+    }))
+    await r2Client.send(new DeleteObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: originalPath,
+    }))
+
+    // Step 2: Rename the thumbnail to the original name
+    await r2Client.send(new CopyObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      CopySource: `${process.env.R2_BUCKET_NAME}/${thumbnailPath}`,
+      Key: originalPath,
+    }))
+    await r2Client.send(new DeleteObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: thumbnailPath,
+    }))
+
+    // Step 3: Rename the temporary original to the thumbnail slot
+    await r2Client.send(new CopyObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      CopySource: `${process.env.R2_BUCKET_NAME}/${tempOriginalPath}`,
+      Key: thumbnailPath,
+    }))
+    await r2Client.send(new DeleteObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: tempOriginalPath,
+    }))
+
+    return { success: true }
+  } catch (error) {
+    console.error('Error swapping storyboard images:', error)
+    throw new Error(getUserFriendlyError(error))
+  }
+}
+
