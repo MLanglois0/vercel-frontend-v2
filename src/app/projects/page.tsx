@@ -3,14 +3,16 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { PlusCircle, Book } from "lucide-react";
 import { toast } from "sonner";
 import { uploadFile } from '@/app/actions/upload'
 import { useRouter } from 'next/navigation';
 import { getUserFriendlyError } from '@/lib/error-handler'
+import Image from 'next/image';
+import { getSignedImageUrls } from '@/app/actions/storage'
 
 interface Project {
   id: string;
@@ -18,6 +20,7 @@ interface Project {
   book_title: string;
   description: string;
   epub_file_path?: string;
+  cover_file_path?: string;
   status: string;
   user_id: string;
   created_at: string;
@@ -25,9 +28,11 @@ interface Project {
 
 export default function Projects() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [showNewProject, setShowNewProject] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedCover, setSelectedCover] = useState<File | null>(null);
   const [formData, setFormData] = useState({
     project_name: '',
     book_title: '',
@@ -40,7 +45,7 @@ export default function Projects() {
     fetchProjects();
   }, []);
 
-  async function fetchProjects() {
+  const fetchProjects = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
 
@@ -55,6 +60,26 @@ export default function Projects() {
       toast.error(getUserFriendlyError(error))
     } else {
       setProjects(data || [])
+      
+      // Get signed URLs for all cover images
+      for (const project of data || []) {
+        if (project.cover_file_path) {
+          try {
+            const signedFiles = await getSignedImageUrls(session.user.id, project.id)
+            const coverFile = signedFiles.find(file => 
+              file.type === 'image' && file.path === project.cover_file_path
+            )
+            if (coverFile) {
+              setCoverUrls(prev => ({
+                ...prev,
+                [project.id]: coverFile.url
+              }))
+            }
+          } catch (error) {
+            console.error('Error getting signed URL:', error)
+          }
+        }
+      }
     }
     setLoading(false);
   }
@@ -70,6 +95,19 @@ export default function Projects() {
 
     setSelectedFile(file);
   };
+
+  const handleCoverSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const validTypes = ['image/jpeg', 'image/png', 'image/webp']
+    if (!validTypes.includes(file.type)) {
+      toast.error('Please upload a valid image file (JPG, PNG, or WebP)')
+      return
+    }
+
+    setSelectedCover(file)
+  }
 
   const handleCreateProject = async () => {
     if (!selectedFile?.name.toLowerCase().endsWith('.epub')) {
@@ -87,6 +125,11 @@ export default function Projects() {
       return
     }
 
+    if (!selectedCover) {
+      toast.error('Please select a cover image')
+      return
+    }
+
     setIsCreating(true)
     const loadingToast = toast.loading('Creating your project...')
 
@@ -97,6 +140,7 @@ export default function Projects() {
       // Create FormData for upload
       const uploadFormData = new FormData()
       uploadFormData.append('file', selectedFile)
+      uploadFormData.append('cover', selectedCover)
       uploadFormData.append('project_name', formData.project_name)
       uploadFormData.append('book_title', formData.book_title)
       uploadFormData.append('description', formData.description || '')
@@ -107,6 +151,7 @@ export default function Projects() {
       toast.success('Project created successfully')
       setFormData({ project_name: '', book_title: '', description: '' })
       setSelectedFile(null)
+      setSelectedCover(null)
       setShowNewProject(false)
       await fetchProjects()
     } catch (error) {
@@ -181,6 +226,26 @@ export default function Projects() {
               )}
               {isCreating && <p className="text-sm text-gray-500 mt-2">Creating project...</p>}
             </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Upload Cover Image *</label>
+              <p className="text-sm text-gray-500 mb-2">JPG, PNG, or WebP files supported</p>
+              <div className="mt-1 flex items-center">
+                <Input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={handleCoverSelect}
+                  disabled={isCreating}
+                  required
+                  className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"
+                />
+              </div>
+              {selectedCover && (
+                <p className="text-sm text-green-600 mt-2">
+                  Selected cover: {selectedCover.name}
+                </p>
+              )}
+              {isCreating && <p className="text-sm text-gray-500 mt-2">Creating project...</p>}
+            </div>
             <Button 
               onClick={handleCreateProject} 
               disabled={isCreating}
@@ -196,26 +261,41 @@ export default function Projects() {
         {projects.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {projects.map((project) => (
-              <Card key={project.id}>
-                <CardHeader>
-                  <CardTitle>{project.project_name}</CardTitle>
-                  <CardDescription>{project.book_title}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-gray-500">{project.description}</p>
-                  <div className="mt-2 flex items-center">
-                    <span className="text-sm text-gray-500">{project.status}</span>
+              <Card key={project.id} className="flex overflow-hidden h-[180px]">
+                {project.cover_file_path && coverUrls[project.id] && (
+                  <div className="relative w-[120px] h-[180px] flex-shrink-0">
+                    <Image
+                      src={coverUrls[project.id]}
+                      alt={`Cover for ${project.book_title}`}
+                      fill
+                      className="object-cover"
+                      sizes="120px"
+                      priority
+                    />
                   </div>
-                </CardContent>
-                <CardFooter>
-                  <Button 
-                    variant="outline" 
-                    className="w-full"
-                    onClick={() => router.push(`/projects/${project.id}`)}
-                  >
-                    <Book className="mr-2 h-4 w-4" /> Open Project
-                  </Button>
-                </CardFooter>
+                )}
+                <div className="flex flex-col flex-1 h-full">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-center text-xl">{project.project_name}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="flex-1 pb-2">
+                    <p className="text-sm font-medium mb-2">
+                      Book Name: <span className="text-muted-foreground">{project.book_title}</span>
+                    </p>
+                    <p className="text-sm text-muted-foreground line-clamp-2">
+                      {project.description}
+                    </p>
+                  </CardContent>
+                  <CardFooter className="pt-0">
+                    <Button 
+                      variant="outline" 
+                      className="w-full"
+                      onClick={() => router.push(`/projects/${project.id}`)}
+                    >
+                      <Book className="mr-2 h-4 w-4" /> Open Project
+                    </Button>
+                  </CardFooter>
+                </div>
               </Card>
             ))}
           </div>

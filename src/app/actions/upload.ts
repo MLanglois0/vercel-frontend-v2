@@ -11,6 +11,8 @@ const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
 interface UploadResult {
   url: string
   path: string
+  coverUrl: string
+  coverPath: string
 }
 
 export async function uploadFile(formData: FormData, userId: string): Promise<UploadResult> {
@@ -33,10 +35,10 @@ export async function uploadFile(formData: FormData, userId: string): Promise<Up
     if (projectError) throw projectError
     if (!project) throw new Error('Failed to create project')
 
-    // Handle file validation
+    // Handle epub file validation
     const file = formData.get('file') as File
     if (!file || !(file instanceof File)) {
-      throw new Error('No valid file provided')
+      throw new Error('No valid epub file provided')
     }
 
     if (file.size > MAX_FILE_SIZE) {
@@ -48,14 +50,33 @@ export async function uploadFile(formData: FormData, userId: string): Promise<Up
       throw new Error(`Invalid file type. Allowed types: ${ALLOWED_EXTENSIONS.join(', ')}`)
     }
 
-    // Upload file and get both path and URL in one call
-    const { path, url } = await uploadProjectFile(file, userId, project.id)
+    // Handle cover image validation
+    const cover = formData.get('cover') as File
+    if (!cover || !(cover instanceof File)) {
+      throw new Error('No valid cover image provided')
+    }
 
-    // Update project using supabaseAdmin
+    if (cover.size > MAX_FILE_SIZE) {
+      throw new Error(`Cover image size exceeds ${MAX_FILE_SIZE / 1024 / 1024}MB limit`)
+    }
+
+    const coverExt = cover.name.split('.').pop()?.toLowerCase()
+    if (!coverExt || !['jpg', 'jpeg', 'png', 'webp'].includes(coverExt)) {
+      throw new Error('Invalid cover image type. Allowed types: JPG, PNG, WebP')
+    }
+
+    // Upload epub file
+    const { path: epubPath, url: epubUrl } = await uploadProjectFile(file, userId, project.id)
+
+    // Upload cover image
+    const { path: coverPath, url: coverUrl } = await uploadProjectFile(cover, userId, project.id)
+
+    // Update project with both file paths using supabaseAdmin
     const { error: updateError } = await supabaseAdmin
       .from('projects')
       .update({ 
-        epub_file_path: path,
+        epub_file_path: epubPath,
+        cover_file_path: coverPath,
         status: 'ready' 
       })
       .eq('id', project.id)
@@ -63,10 +84,15 @@ export async function uploadFile(formData: FormData, userId: string): Promise<Up
     if (updateError) throw updateError
 
     revalidatePath('/projects')
-    return { url, path }
+    return { 
+      url: epubUrl, 
+      path: epubPath,
+      coverUrl: coverUrl,
+      coverPath: coverPath
+    }
 
   } catch (error) {
-    console.error('Server upload error:', error)
+    console.error('Error in uploadFile:', error)
     throw new Error(getUserFriendlyError(error))
   }
 }

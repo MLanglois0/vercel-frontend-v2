@@ -23,6 +23,7 @@ interface Project {
   description: string
   status: string
   epub_file_path: string
+  cover_file_path: string
 }
 
 interface StoryboardItem {
@@ -68,6 +69,7 @@ export default function ProjectDetail() {
   const [hasSecondTrack, setHasSecondTrack] = useState(false)
   const [switchingTrack, setSwitchingTrack] = useState<1 | 2 | null>(null)
   const [swappingImages, setSwappingImages] = useState<Set<string>>(new Set())
+  const [coverUrl, setCoverUrl] = useState<string | null>(null)
 
   const fetchProject = useCallback(async () => {
     try {
@@ -87,10 +89,24 @@ export default function ProjectDetail() {
 
       // Get signed URLs from R2 through server action
       const signedFiles = await getSignedImageUrls(session.user.id, project.id)
-      console.log('Signed files:', signedFiles) // Debug log
+      
+      // Separate cover image from storyboard images
+      const coverFile = signedFiles.find(file => 
+        file.path === project.cover_file_path
+      )
+      
+      // Filter out the cover image from the storyboard items
+      const storyboardFiles = signedFiles.filter(file => 
+        file.path !== project.cover_file_path
+      )
 
-      // Group files by number
-      const groupedItems = signedFiles.reduce((acc, file) => {
+      // Set cover URL if found
+      if (coverFile) {
+        setCoverUrl(coverFile.url)
+      }
+
+      // Continue with existing grouping logic for storyboard items
+      const groupedItems = storyboardFiles.reduce((acc, file) => {
         const number = file.number
         if (!acc[number]) {
           acc[number] = { number }
@@ -341,28 +357,42 @@ export default function ProjectDetail() {
 
   return (
     <div className="container mx-auto p-4 space-y-8">
-      <div className="space-y-4">
-        <h1 className="text-3xl font-bold">{project.project_name}</h1>
-        <div className="flex justify-between items-center">
-          <h2 className="text-xl font-semibold">{project.book_title}</h2>
-          <div className="flex gap-4 items-center">
-            <Badge variant={
-              project.status === 'completed' ? 'default' : 
-              project.status === 'in_progress' ? 'secondary' : 
-              'outline'
-            }>
-              {project.status}
-            </Badge>
-            <Button 
-              variant="destructive" 
-              className="bg-black hover:bg-gray-800"
-              onClick={() => setIsDeleteDialogOpen(true)}
-            >
-              Delete Project
-            </Button>
+      <div className="flex gap-6">
+        {coverUrl && (
+          <div className="relative w-[140px] h-[210px] flex-shrink-0">
+            <Image
+              src={coverUrl}
+              alt={`Cover for ${project?.book_title}`}
+              fill
+              className="object-cover rounded-md"
+              sizes="140px"
+              priority
+            />
           </div>
+        )}
+        <div className="flex-1 space-y-4">
+          <h1 className="text-3xl font-bold">{project?.project_name}</h1>
+          <div className="flex justify-between items-center">
+            <h2 className="text-xl font-semibold">{project?.book_title}</h2>
+            <div className="flex gap-4 items-center">
+              <Badge variant={
+                project?.status === 'completed' ? 'default' : 
+                project?.status === 'in_progress' ? 'secondary' : 
+                'outline'
+              }>
+                {project?.status}
+              </Badge>
+              <Button 
+                variant="destructive" 
+                className="bg-black hover:bg-gray-800"
+                onClick={() => setIsDeleteDialogOpen(true)}
+              >
+                Delete Project
+              </Button>
+            </div>
+          </div>
+          <p className="text-muted-foreground">{project?.description}</p>
         </div>
-        <p className="text-muted-foreground">{project.description}</p>
       </div>
 
       <div className="space-y-4">
