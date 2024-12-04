@@ -185,37 +185,6 @@ export async function deleteProjectFile(path: string): Promise<void> {
   }
 }
 
-export async function saveImageHistory({
-  originalPath,
-  version
-}: {
-  originalPath: string
-  version: number
-}): Promise<{ success: boolean }> {
-  if (!originalPath) throw new Error('Original path is required')
-  if (version < 0) throw new Error('Version must be a positive number')
-
-  // Create the new filename with _<version>sbsave suffix
-  const pathParts = originalPath.split('.')
-  const ext = pathParts.pop()
-  const basePath = pathParts.join('.')
-  const newPath = `${basePath}_${version}sbsave.${ext}`
-
-  try {
-    // Copy the current image to the saved version
-    await r2Client.send(new CopyObjectCommand({
-      Bucket: process.env.R2_BUCKET_NAME,
-      CopySource: `${process.env.R2_BUCKET_NAME}/${originalPath}`,
-      Key: newPath,
-    }))
-
-    return { success: true }
-  } catch (error) {
-    console.error('Error saving image history:', error)
-    throw new Error(getUserFriendlyError(error))
-  }
-}
-
 export async function saveAudioHistory({
   originalPath
 }: {

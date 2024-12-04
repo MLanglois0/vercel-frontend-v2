@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
 import { ChevronLeft, ChevronRight, FileText } from "lucide-react"
 import { toast } from 'sonner'
-import { getSignedImageUrls, deleteProjectFile, saveImageHistory, saveAudioHistory, swapStoryboardImage } from '@/app/actions/storage'
+import { getSignedImageUrls, deleteProjectFile, saveAudioHistory, swapStoryboardImage } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
 import { getUserFriendlyError } from '@/lib/error-handler'
@@ -63,7 +63,6 @@ export default function ProjectDetail() {
   const [confirmProjectName, setConfirmProjectName] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
   const router = useRouter()
-  const [generatingImages, setGeneratingImages] = useState<Set<number>>(new Set())
   const [generatingAudio, setGeneratingAudio] = useState<Set<number>>(new Set())
   const [primaryTrack, setPrimaryTrack] = useState<1 | 2>(1)
   const [hasSecondTrack, setHasSecondTrack] = useState(false)
@@ -259,61 +258,6 @@ export default function ProjectDetail() {
     }
   }
 
-  const handleNewImage = async (item: StoryboardItem) => {
-    try {
-      if (generatingImages.has(item.number)) return
-      
-      if (!item.image?.path) {
-        console.error('No image path found in item:', item)
-        throw new Error('No image path found')
-      }
-      
-      const savedVersions = item.image.savedVersions || []
-      
-      if (savedVersions.length >= 3) {
-        const horizontalOffset = item.number * 341
-        toast('Maximum versions reached', {
-          description: 'Limited to 3 image generations. Please contact support if you need assistance.',
-          position: 'bottom-right',
-          duration: 4000,
-          style: {
-            position: 'fixed',
-            left: `${horizontalOffset}px`,
-            bottom: '50%',
-            transform: 'translate(-50%, 50%)',
-            marginLeft: '410px'
-          }
-        })
-        return
-      }
-
-      setGeneratingImages(prev => new Set(prev).add(item.number))
-
-      // Save current image as historical version
-      const newVersion = savedVersions.length
-      
-      // Call server action to handle file operations
-      await saveImageHistory({
-        originalPath: item.image.path,
-        version: newVersion
-      })
-
-      // Your backend command for new image generation will go here
-      console.log('Backend command to generate replacement image')
-
-      await fetchProject()
-    } catch (error) {
-      console.error('Error in handleNewImage:', error)
-      toast.error(getUserFriendlyError(error))
-    } finally {
-      setGeneratingImages(prev => {
-        const next = new Set(prev)
-        next.delete(item.number)
-        return next
-      })
-    }
-  }
-
   const handleNewAudio = async (item: StoryboardItem) => {
     try {
       if (generatingAudio.has(item.number)) return
@@ -475,16 +419,12 @@ export default function ProjectDetail() {
                           )}
                           <Button 
                             variant="outline" 
-                            onClick={() => handleNewImage(item)}
+                            onClick={() => {
+                              console.log("Sending request to the backend")
+                            }}
                             className="whitespace-nowrap text-sm"
-                            disabled={generatingImages.has(item.number)}
                           >
-                            {generatingImages.has(item.number) 
-                              ? 'Working...' 
-                              : item.image?.savedVersions?.length === 3 
-                                ? 'Max Versions' 
-                                : 'New Image'
-                            }
+                            New Image Set
                           </Button>
                         </div>
                         <div className="flex gap-2 flex-1">
