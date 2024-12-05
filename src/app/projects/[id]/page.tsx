@@ -518,7 +518,7 @@ export default function ProjectDetail() {
                       <div className="border-t my-2" />
                       
                       <div className="space-y-2">
-                        {item.audio?.url && (
+                        {item.audio?.url ? (
                           <div className="flex items-center gap-2">
                             <AudioPlayer
                               audioUrl={item.audio.url}
@@ -554,6 +554,10 @@ export default function ProjectDetail() {
                                     : 'New Audio'
                               }
                             </Button>
+                          </div>
+                        ) : (
+                          <div className="h-[70px] flex items-center justify-center">
+                            <p className="text-sm text-muted-foreground">Audio file not found</p>
                           </div>
                         )}
                       </div>
