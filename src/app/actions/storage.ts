@@ -25,7 +25,7 @@ export async function listProjectFiles(userId: string, projectId: string) {
   try {
     const command = new ListObjectsV2Command({
       Bucket: process.env.R2_BUCKET_NAME,
-      Prefix: `${userId}/${projectId}/`,
+      Prefix: `${userId}/${projectId}/temp/`,
     })
 
     const { Contents: files } = await r2Client.send(command)

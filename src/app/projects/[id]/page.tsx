@@ -9,12 +9,13 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
 import { ChevronLeft, ChevronRight, FileText } from "lucide-react"
 import { toast } from 'sonner'
-import { getSignedImageUrls, deleteProjectFile, saveAudioHistory, swapStoryboardImage } from '@/app/actions/storage'
+import { getSignedImageUrls, deleteProjectFile, saveAudioHistory, swapStoryboardImage, uploadProjectFile } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
 import { getUserFriendlyError } from '@/lib/error-handler'
 import { Input } from "@/components/ui/input"
 import Image from 'next/image'
+import { Textarea } from "@/components/ui/textarea"
 
 interface Project {
   id: string
@@ -70,6 +71,14 @@ export default function ProjectDetail() {
   const [switchingTrack, setSwitchingTrack] = useState<1 | 2 | null>(null)
   const [swappingImages, setSwappingImages] = useState<Set<string>>(new Set())
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [editFormData, setEditFormData] = useState({
+    project_name: '',
+    book_title: '',
+    description: '',
+  })
+  const [selectedNewCover, setSelectedNewCover] = useState<File | null>(null)
+  const [isEditing, setIsEditing] = useState(false)
 
   const fetchProject = useCallback(async () => {
     try {
@@ -352,6 +361,56 @@ export default function ProjectDetail() {
     }
   }
 
+  const handleEditProject = async () => {
+    if (!project) return;
+    
+    setIsEditing(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('No session');
+
+      // If a new cover is selected, handle the upload
+      let newCoverPath = project.cover_file_path;
+      if (selectedNewCover) {
+        // Upload new cover
+        const { path: coverPath } = await uploadProjectFile(
+          selectedNewCover,
+          session.user.id,
+          project.id
+        );
+
+        // Delete old cover if it exists
+        if (project.cover_file_path) {
+          await deleteProjectFile(project.cover_file_path);
+        }
+
+        newCoverPath = coverPath;
+      }
+
+      // Update project in database
+      const { error: updateError } = await supabase
+        .from('projects')
+        .update({
+          project_name: editFormData.project_name,
+          book_title: editFormData.book_title,
+          description: editFormData.description,
+          cover_file_path: newCoverPath,
+        })
+        .eq('id', project.id);
+
+      if (updateError) throw updateError;
+
+      toast.success('Project updated successfully');
+      setIsEditDialogOpen(false);
+      await fetchProject(); // Refresh the project data
+    } catch (error) {
+      console.error('Error updating project:', error);
+      toast.error(getUserFriendlyError(error));
+    } finally {
+      setIsEditing(false);
+    }
+  };
+
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
 
@@ -388,6 +447,20 @@ export default function ProjectDetail() {
                 onClick={() => setIsDeleteDialogOpen(true)}
               >
                 Delete Project
+              </Button>
+              <Button
+                variant="outline"
+                className="bg-background hover:bg-gray-100"
+                onClick={() => {
+                  setEditFormData({
+                    project_name: project.project_name,
+                    book_title: project.book_title,
+                    description: project.description || '',
+                  });
+                  setIsEditDialogOpen(true);
+                }}
+              >
+                Edit Project
               </Button>
             </div>
           </div>
@@ -633,6 +706,80 @@ export default function ProjectDetail() {
                 onClick={handleDeleteProject}
               >
                 {isDeleting ? 'Deleting...' : 'Delete Project'}
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Project</DialogTitle>
+            <DialogDescription>
+              Update your project details. The EPUB file cannot be changed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Project Name *</label>
+              <Input
+                value={editFormData.project_name}
+                onChange={(e) => setEditFormData({ ...editFormData, project_name: e.target.value })}
+                placeholder="Enter project name"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Book Title *</label>
+              <Input
+                value={editFormData.book_title}
+                onChange={(e) => setEditFormData({ ...editFormData, book_title: e.target.value })}
+                placeholder="Enter book title"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Description</label>
+              <Textarea
+                value={editFormData.description}
+                onChange={(e) => setEditFormData({ ...editFormData, description: e.target.value })}
+                placeholder="Enter project description"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Update Cover Image</label>
+              <p className="text-sm text-gray-500 mb-2">Optional. JPG, PNG, or WebP files supported</p>
+              <div className="mt-1 flex items-center">
+                <Input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    
+                    const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
+                    if (!validTypes.includes(file.type)) {
+                      toast.error('Please upload a valid image file (JPG, PNG, or WebP)');
+                      return;
+                    }
+                    
+                    setSelectedNewCover(file);
+                  }}
+                  disabled={isEditing}
+                  className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"
+                />
+              </div>
+              {selectedNewCover && (
+                <p className="text-sm text-green-600 mt-2">
+                  Selected new cover: {selectedNewCover.name}
+                </p>
+              )}
+            </div>
+            <DialogFooter>
+              <Button
+                onClick={handleEditProject}
+                disabled={isEditing || !editFormData.project_name || !editFormData.book_title}
+              >
+                {isEditing ? 'Updating...' : 'Update Project'}
               </Button>
             </DialogFooter>
           </div>
