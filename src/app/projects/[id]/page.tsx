@@ -365,6 +365,8 @@ export default function ProjectDetail() {
     if (!project) return;
     
     setIsEditing(true);
+    const loadingToast = toast.loading('Updating your project...');
+    
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('No session');
@@ -400,11 +402,14 @@ export default function ProjectDetail() {
 
       if (updateError) throw updateError;
 
+      toast.dismiss(loadingToast);
       toast.success('Project updated successfully');
       setIsEditDialogOpen(false);
+      setSelectedNewCover(null);
       await fetchProject(); // Refresh the project data
     } catch (error) {
       console.error('Error updating project:', error);
+      toast.dismiss(loadingToast);
       toast.error(getUserFriendlyError(error));
     } finally {
       setIsEditing(false);
@@ -431,9 +436,9 @@ export default function ProjectDetail() {
         )}
         <div className="flex-1 space-y-4">
           <h1 className="text-3xl font-bold">{project?.project_name}</h1>
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-semibold">{project?.book_title}</h2>
-            <div className="flex gap-4 items-center">
+          <div className="flex justify-between items-start">
+            <div className="space-y-2">
+              <h2 className="text-xl font-semibold">{project?.book_title}</h2>
               <Badge variant={
                 project?.status === 'completed' ? 'default' : 
                 project?.status === 'in_progress' ? 'secondary' : 
@@ -441,16 +446,11 @@ export default function ProjectDetail() {
               }>
                 {project?.status}
               </Badge>
-              <Button 
-                variant="destructive" 
-                className="bg-black hover:bg-gray-800"
-                onClick={() => setIsDeleteDialogOpen(true)}
-              >
-                Delete Project
-              </Button>
+            </div>
+            <div className="flex flex-col gap-2">
               <Button
                 variant="outline"
-                className="bg-background hover:bg-gray-100"
+                className="bg-background hover:bg-gray-100 w-full"
                 onClick={() => {
                   setEditFormData({
                     project_name: project.project_name,
@@ -461,6 +461,13 @@ export default function ProjectDetail() {
                 }}
               >
                 Edit Project
+              </Button>
+              <Button 
+                variant="destructive" 
+                className="bg-black hover:bg-gray-800 w-full"
+                onClick={() => setIsDeleteDialogOpen(true)}
+              >
+                Delete Project
               </Button>
             </div>
           </div>
@@ -713,7 +720,7 @@ export default function ProjectDetail() {
       </Dialog>
 
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Edit Project</DialogTitle>
             <DialogDescription>
@@ -727,6 +734,7 @@ export default function ProjectDetail() {
                 value={editFormData.project_name}
                 onChange={(e) => setEditFormData({ ...editFormData, project_name: e.target.value })}
                 placeholder="Enter project name"
+                disabled={isEditing}
               />
             </div>
             <div>
@@ -735,6 +743,7 @@ export default function ProjectDetail() {
                 value={editFormData.book_title}
                 onChange={(e) => setEditFormData({ ...editFormData, book_title: e.target.value })}
                 placeholder="Enter book title"
+                disabled={isEditing}
               />
             </div>
             <div>
@@ -743,6 +752,7 @@ export default function ProjectDetail() {
                 value={editFormData.description}
                 onChange={(e) => setEditFormData({ ...editFormData, description: e.target.value })}
                 placeholder="Enter project description"
+                disabled={isEditing}
               />
             </div>
             <div>
@@ -779,7 +789,7 @@ export default function ProjectDetail() {
                 onClick={handleEditProject}
                 disabled={isEditing || !editFormData.project_name || !editFormData.book_title}
               >
-                {isEditing ? 'Updating...' : 'Update Project'}
+                {isEditing ? 'Updating Project...' : 'Update Project'}
               </Button>
             </DialogFooter>
           </div>
