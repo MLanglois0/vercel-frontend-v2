@@ -64,67 +64,38 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
         else if (/\.epub$/i.test(fileName)) type = 'epub'
         else return null
 
-        // Extract number based on file type
-        let number: number
-        if (type === 'image') {
-          // Check if it's a saved version
-          const savedMatch = fileName.match(/_(\d+)sbsave\.jpg$/)
-          if (savedMatch) {
-            const version = parseInt(savedMatch[1])
-            const baseMatch = fileName.match(/chapter0_(\d+)_image/)
-            number = baseMatch ? parseInt(baseMatch[1]) : 0
-            
-            const getCommand = new GetObjectCommand({
-              Bucket: process.env.R2_BUCKET_NAME,
-              Key: file.Key,
-            })
-            const url = await getSignedUrl(r2Client, getCommand, { expiresIn: 3600 })
-            
-            return {
-              url,
-              number,
-              path: file.Key,
-              type,
-              version
-            }
-          } else {
-            const match = fileName.match(/chapter0_(\d+)_image/)
-            number = match ? parseInt(match[1]) : 0
-          }
-        } else if (type === 'audio') {
-          const match = fileName.match(/chapter0_(\d+)_/)
-          number = match ? parseInt(match[1]) : 0
-        } else if (type === 'text') {
-          const match = fileName.match(/chapter0_(\d+)_/)
-          number = match ? parseInt(match[1]) : 0
-        } else {
-          number = 0
-        }
-
-        // Get text content if it's a text file
-        let content: string | undefined
-        if (type === 'text') {
-          const getCommand = new GetObjectCommand({
-            Bucket: process.env.R2_BUCKET_NAME,
-            Key: file.Key,
-          })
-          const response = await r2Client.send(getCommand)
-          content = await response.Body?.transformToString()
-        }
-
-        // Generate signed URL for all file types
+        // Generate signed URL
         const getCommand = new GetObjectCommand({
           Bucket: process.env.R2_BUCKET_NAME,
           Key: file.Key,
         })
-        const url = await getSignedUrl(r2Client, getCommand, { expiresIn: 3600 })
+        
+        const url = await getSignedUrl(r2Client, getCommand, { 
+          expiresIn: 3600 
+        })
+
+        // Extract number and handle version info
+        let number = 0
+        let version: number | undefined
+
+        if (type === 'image') {
+          const savedMatch = fileName.match(/_(\d+)sbsave\.jpg$/)
+          if (savedMatch) {
+            version = parseInt(savedMatch[1])
+            const baseMatch = fileName.match(/chapter0_(\d+)_image/)
+            number = baseMatch ? parseInt(baseMatch[1]) : 0
+          } else {
+            const match = fileName.match(/chapter0_(\d+)_image/)
+            number = match ? parseInt(match[1]) : 0
+          }
+        }
 
         return {
           url,
           number,
           path: file.Key,
           type,
-          content
+          version
         }
       })
     )
@@ -137,12 +108,32 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
 }
 
 export async function uploadProjectFile(
-  file: File,
+  file: Blob,
   userId: string,
   projectId: string,
+  filename: string,
+  contentType: string
 ): Promise<UploadResult> {
   try {
-    const path = `${userId}/${projectId}/${file.name}`
+    const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB in bytes
+    if (file.size > MAX_FILE_SIZE) {
+      throw new Error(`File size must be less than ${MAX_FILE_SIZE / (1024 * 1024)}MB`)
+    }
+
+    const path = `${userId}/${projectId}/${filename}`
+
+    // Validate file type
+    const allowedTypes = [
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'audio/mpeg',
+      'application/epub+zip',
+      'text/plain'
+    ]
+    if (!allowedTypes.includes(contentType)) {
+      throw new Error('Invalid file type. Only JPG, PNG, WebP, MP3, EPUB, and TXT files are allowed.')
+    }
 
     const arrayBuffer = await file.arrayBuffer()
     const buffer = Buffer.from(arrayBuffer)
@@ -151,12 +142,11 @@ export async function uploadProjectFile(
       Bucket: process.env.R2_BUCKET_NAME,
       Key: path,
       Body: buffer,
-      ContentType: file.type,
+      ContentType: contentType,
     })
 
     await r2Client.send(uploadCommand)
 
-    // Get signed URL immediately after upload
     const getCommand = new GetObjectCommand({
       Bucket: process.env.R2_BUCKET_NAME,
       Key: path,

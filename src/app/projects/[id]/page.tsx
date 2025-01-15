@@ -94,28 +94,31 @@ export default function ProjectDetail() {
       if (error) throw error
       if (!project) throw new Error('Project not found')
 
+      console.log('Project data:', project) // Log project data
+      console.log('Cover file path:', project.cover_file_path) // Log cover path
+
       setProject(project)
 
       // Get signed URLs from R2 through server action
       const signedFiles = await getSignedImageUrls(session.user.id, project.id)
+      console.log('Signed files:', signedFiles) // Log all signed files
       
-      // Separate cover image from storyboard images
-      const coverFile = signedFiles.find(file => 
-        file.path === project.cover_file_path
-      )
+      // Find cover file
+      const coverFile = signedFiles.find(file => {
+        console.log('Comparing:', file.path, project.cover_file_path) // Log each comparison
+        return file.path === project.cover_file_path
+      })
       
-      // Filter out the cover image from the storyboard items
-      const storyboardFiles = signedFiles.filter(file => 
-        file.path !== project.cover_file_path
-      )
-
+      console.log('Found cover file:', coverFile) // Log found cover file
+      
       // Set cover URL if found
       if (coverFile) {
+        console.log('Setting cover URL:', coverFile.url) // Log the URL being set
         setCoverUrl(coverFile.url)
       }
 
       // Continue with existing grouping logic for storyboard items
-      const groupedItems = storyboardFiles.reduce((acc, file) => {
+      const groupedItems = signedFiles.reduce((acc, file) => {
         const number = file.number
         if (!acc[number]) {
           acc[number] = { number }
@@ -374,11 +377,13 @@ export default function ProjectDetail() {
       // If a new cover is selected, handle the upload
       let newCoverPath = project.cover_file_path;
       if (selectedNewCover) {
-        // Upload new cover
+        // Upload new cover with original filename
         const { path: coverPath } = await uploadProjectFile(
           selectedNewCover,
           session.user.id,
-          project.id
+          project.id,
+          selectedNewCover.name,  // Use original filename
+          selectedNewCover.type
         );
 
         // Delete old cover if it exists
