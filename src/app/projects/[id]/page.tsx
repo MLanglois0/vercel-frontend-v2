@@ -101,13 +101,12 @@ export default function ProjectDetail() {
 
       // Get signed URLs from R2 through server action
       const signedFiles = await getSignedImageUrls(session.user.id, project.id)
-      console.log('Signed files:', signedFiles) // Log all signed files
+      console.log('All signed files before filtering:', signedFiles) // Debug all files
       
-      // Find cover file
-      const coverFile = signedFiles.find(file => {
-        console.log('Comparing:', file.path, project.cover_file_path) // Log each comparison
-        return file.path === project.cover_file_path
-      })
+      // Find cover file first
+      const coverFile = signedFiles.find(file => 
+        file.path === project.cover_file_path
+      )
       
       console.log('Found cover file:', coverFile) // Log found cover file
       
@@ -117,9 +116,18 @@ export default function ProjectDetail() {
         setCoverUrl(coverFile.url)
       }
 
+      // Filter out the cover image before grouping storyboard items
+      const storyboardFiles = signedFiles.filter(file => 
+        file.path !== project.cover_file_path && 
+        !file.path.endsWith('cover.jpg') // Additional check for cover images
+      )
+      console.log('Storyboard files after filtering:', storyboardFiles) // Debug filtered files
+      
       // Continue with existing grouping logic for storyboard items
-      const groupedItems = signedFiles.reduce((acc, file) => {
+      const groupedItems = storyboardFiles.reduce((acc, file) => {
         const number = file.number
+        console.log('Processing file:', { path: file.path, type: file.type, number }) // Debug each file processing
+
         if (!acc[number]) {
           acc[number] = { number }
         }
@@ -168,18 +176,23 @@ export default function ProjectDetail() {
         if (file.type === 'text' && file.content) {
           // Match number before .txt
           const match = file.path.match(/(\d+)\.txt$/)
+          console.log('Text file match:', { path: file.path, match }) // Debug text file matching
           if (match) {
             const textNumber = parseInt(match[1])
             acc[textNumber].text = { content: file.content, path: file.path }
-            console.log(`Added text to group ${textNumber}:`, file.path)
+            console.log(`Added text to group ${textNumber}:`, {
+              path: file.path,
+              content: file.content?.substring(0, 50) + '...' // Show first 50 chars
+            })
+          } else {
+            console.log('No match found for text file:', file.path) // Debug unmatched text files
           }
         }
         
         return acc
       }, {} as Record<number, StoryboardItem>)
 
-      // Log the initial grouping
-      console.log('Initial grouping:', groupedItems)
+      console.log('Final grouped items:', groupedItems) // Debug final structure
 
       // Validate the grouped items
       const cleanedGroupedItems = Object.entries(groupedItems).reduce<Record<number, StoryboardItem>>((acc, [key, value]) => {

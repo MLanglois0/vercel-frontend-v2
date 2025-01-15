@@ -50,57 +50,74 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
     const { Contents: files } = await r2Client.send(command)
     if (!files) return []
 
+    console.log('Files from R2:', files.map(f => f.Key))
+
     const signedUrls = await Promise.all(
       files.map(async (file): Promise<SignedFileResponse | null> => {
         if (!file.Key) return null
 
         const fileName = file.Key.split('/').pop() || ''
         
-        // Determine file type from extension
+        // Extract the last number before file extension or sbsave
+        let number = 0
+        const numberMatch = fileName.match(/(\d+)(?:_image|\.|_chunk)/)
+        if (numberMatch) {
+          number = parseInt(numberMatch[1])
+        }
+        
+        // Determine file type and handle special cases
         let type: FileType
-        if (/\.(jpg|jpeg|png|webp)$/i.test(fileName)) type = 'image'
+        let content: string | undefined
+        let version: number | undefined
+
+        if (/\.(jpg|jpeg|png|webp)$/i.test(fileName)) {
+          type = 'image'
+          // Check for sbsave version
+          const saveMatch = fileName.match(/_(\d+)sbsave\.[^.]+$/)
+          if (saveMatch) {
+            version = parseInt(saveMatch[1])
+          }
+        }
         else if (/\.mp3$/i.test(fileName)) type = 'audio'
-        else if (/\.txt$/i.test(fileName)) type = 'text'
+        else if (/\.txt$/i.test(fileName)) {
+          type = 'text'
+          const getCommand = new GetObjectCommand({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Key: file.Key,
+          })
+          const response = await r2Client.send(getCommand)
+          content = await response.Body?.transformToString()
+          console.log('Text file found:', { fileName, number, content })
+        }
         else if (/\.epub$/i.test(fileName)) type = 'epub'
         else return null
 
-        // Generate signed URL
-        const getCommand = new GetObjectCommand({
-          Bucket: process.env.R2_BUCKET_NAME,
-          Key: file.Key,
-        })
-        
-        const url = await getSignedUrl(r2Client, getCommand, { 
-          expiresIn: 3600 
-        })
-
-        // Extract number and handle version info
-        let number = 0
-        let version: number | undefined
-
-        if (type === 'image') {
-          const savedMatch = fileName.match(/_(\d+)sbsave\.jpg$/)
-          if (savedMatch) {
-            version = parseInt(savedMatch[1])
-            const baseMatch = fileName.match(/chapter0_(\d+)_image/)
-            number = baseMatch ? parseInt(baseMatch[1]) : 0
-          } else {
-            const match = fileName.match(/chapter0_(\d+)_image/)
-            number = match ? parseInt(match[1]) : 0
-          }
-        }
+        console.log('Processing file:', { fileName, type, number, version })
 
         return {
-          url,
+          url: await getSignedUrl(r2Client, new GetObjectCommand({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Key: file.Key,
+          }), { expiresIn: 3600 }),
           number,
           path: file.Key,
           type,
+          content,
           version
         }
       })
     )
 
-    return signedUrls.filter((url): url is SignedFileResponse => url !== null)
+    const filtered = signedUrls.filter((url): url is SignedFileResponse => url !== null)
+    console.log('Filtered signed URLs:', filtered.map(f => ({ 
+      type: f.type, 
+      number: f.number,
+      version: f.version,
+      path: f.path, 
+      hasContent: !!f.content 
+    })))
+
+    return filtered
   } catch (error) {
     console.error('Error generating signed URLs:', error)
     throw error
