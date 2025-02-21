@@ -498,12 +498,29 @@ export default function ProjectDetail() {
         <div className="mt-4 bg-white rounded-lg p-6 shadow-sm">
           <TabsContent value="intake">
             <Card className="p-6 border-0 shadow-none">
-              <p className="text-3xl font-bold text-center">Intake Tab Here</p>
+              <div className="flex justify-between items-center mb-6">
+                <p className="text-3xl font-bold">Intake Tab Here</p>
+                <Button 
+                  variant="outline"
+                  onClick={() => console.log("Process Epub File button clicked")}
+                >
+                  Process Epub File
+                </Button>
+              </div>
             </Card>
           </TabsContent>
 
           <TabsContent value="storyboard">
             <Card className="p-6 border-0 shadow-none">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-2xl font-semibold">Storyboard</h3>
+                <Button 
+                  variant="outline"
+                  onClick={() => console.log("Generate Storyboard button clicked")}
+                >
+                  Generate Storyboard
+                </Button>
+              </div>
               {loading ? (
                 <div className="flex items-center justify-center min-h-[200px]">
                   <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent"></div>
