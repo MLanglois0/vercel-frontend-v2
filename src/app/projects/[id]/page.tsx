@@ -3,10 +3,10 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ChevronLeft, ChevronRight, FileText } from "lucide-react"
 import { toast } from 'sonner'
 import { getSignedImageUrls, deleteProjectFile, saveAudioHistory, swapStoryboardImage, uploadProjectFile } from '@/app/actions/storage'
@@ -70,7 +70,6 @@ export default function ProjectDetail() {
   const [hasSecondTrack, setHasSecondTrack] = useState(false)
   const [switchingTrack, setSwitchingTrack] = useState<1 | 2 | null>(null)
   const [swappingImages, setSwappingImages] = useState<Set<string>>(new Set())
-  const [coverUrl, setCoverUrl] = useState<string | null>(null)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [editFormData, setEditFormData] = useState({
     project_name: '',
@@ -79,6 +78,7 @@ export default function ProjectDetail() {
   })
   const [selectedNewCover, setSelectedNewCover] = useState<File | null>(null)
   const [isEditing, setIsEditing] = useState(false)
+  const [coverUrl, setCoverUrl] = useState<string | null>(null)
 
   const fetchProject = useCallback(async () => {
     try {
@@ -260,9 +260,6 @@ export default function ProjectDetail() {
     }
   }
 
-  // Check if there are any image files
-  const hasImages = items.some(item => item.image?.url)
-
   const handleDeleteProject = async () => {
     if (!project || confirmProjectName !== project.project_name) return
     
@@ -443,265 +440,287 @@ export default function ProjectDetail() {
 
   return (
     <div className="container mx-auto p-4 space-y-8">
-      <div className="flex gap-6">
+      <div className="flex items-start gap-6">
+        {/* Cover Image - reduced to 50% size */}
         {coverUrl && (
-          <div className="relative w-[140px] h-[210px] flex-shrink-0">
+          <div className="relative w-[70px] h-[105px] flex-shrink-0">
             <Image
               src={coverUrl}
               alt={`Cover for ${project?.book_title}`}
               fill
               className="object-cover rounded-md"
-              sizes="140px"
+              sizes="70px"
               priority
             />
           </div>
         )}
-        <div className="flex-1 space-y-4">
-          <h1 className="text-3xl font-bold">{project?.project_name}</h1>
-          <div className="flex justify-between items-start">
-            <div className="space-y-2">
-              <h2 className="text-xl font-semibold">{project?.book_title}</h2>
-              <Badge variant={
-                project?.status === 'completed' ? 'default' : 
-                project?.status === 'in_progress' ? 'secondary' : 
-                'outline'
-              }>
-                {project?.status}
-              </Badge>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Button
-                variant="outline"
-                className="bg-background hover:bg-gray-100 w-full"
-                onClick={() => {
-                  setEditFormData({
-                    project_name: project.project_name,
-                    book_title: project.book_title,
-                    description: project.description || '',
-                  });
-                  setIsEditDialogOpen(true);
-                }}
-              >
-                Edit Project
-              </Button>
-              <Button 
-                variant="destructive" 
-                className="bg-black hover:bg-gray-800 w-full"
-                onClick={() => setIsDeleteDialogOpen(true)}
-              >
-                Delete Project
-              </Button>
-            </div>
+
+        {/* Project Info and Actions */}
+        <div className="flex flex-1 justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">{project?.project_name}</h1>
+            <p className="text-muted-foreground">{project?.book_title}</p>
+            <p className="text-muted-foreground mt-2">{project?.description}</p>
           </div>
-          <p className="text-muted-foreground">{project?.description}</p>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setIsEditDialogOpen(true)}>
+              Edit Project
+            </Button>
+            <Button variant="destructive" onClick={() => setIsDeleteDialogOpen(true)}>
+              Delete Project
+            </Button>
+          </div>
         </div>
       </div>
 
-      <div className="space-y-4">
-        <h3 className="text-2xl font-semibold">Storyboard</h3>
-        {hasImages ? (
-          <div className="relative">
-            <div
-              ref={scrollContainerRef}
-              className="flex overflow-x-scroll space-x-4 pb-4 scrollbar-hide"
-            >
-              {items.map((item) => (
-                item.image?.url && (
-                  <Card key={item.number} className="flex-shrink-0 w-[341px]">
-                    <CardContent className="p-2 space-y-2">
-                      <div className="relative">
-                        {item.image?.url && (
-                          <div className="relative w-full h-[597px]">
-                            <Image 
-                              src={item.image.url} 
-                              alt={`Storyboard ${item.number}`}
-                              fill
-                              className={`object-cover rounded ${
-                                swappingImages.has(item.image.path) ? 'opacity-50' : ''
-                              }`}
-                              priority={item.number <= 2}
-                              sizes="(max-width: 768px) 100vw, 341px"
-                            />
-                            {swappingImages.has(item.image.path) && (
-                              <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent" />
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded">
-                          {item.number}
-                        </div>
-                      </div>
-                      
-                      <div className="flex gap-4 items-center mt-2">
-                        <div className="flex flex-col gap-2">
-                          {item.text?.content && (
-                            <Button
-                              variant="outline"
-                              onClick={() => {
-                                setSelectedText(item.text?.content || null)
-                                setIsTextDialogOpen(true)
-                              }}
-                              className="flex items-center gap-2 text-sm"
-                            >
-                              <FileText className="h-4 w-4" />
-                              View Text
-                            </Button>
-                          )}
-                          <Button 
-                            variant="outline" 
-                            onClick={() => {
-                              console.log("Sending request to the backend")
-                            }}
-                            className="whitespace-nowrap text-sm"
-                          >
-                            New Image Set
-                          </Button>
-                        </div>
-                        <div className="flex gap-2 flex-1">
-                          {item.image?.savedVersions?.map((version) => (
-                            <div 
-                              key={version.version} 
-                              className="relative w-[55px] h-[96px] cursor-pointer hover:opacity-80 transition-opacity"
-                              onClick={async () => {
-                                // Skip if already swapping this image
-                                if (swappingImages.has(version.path)) return
+      <Tabs defaultValue="storyboard" className="w-full">
+        <TabsList className="flex w-full bg-gray-100 p-1 rounded-lg">
+          <TabsTrigger
+            value="intake"
+            className="flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm"
+          >
+            Intake
+          </TabsTrigger>
+          <TabsTrigger
+            value="storyboard"
+            className="flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-orange-600 data-[state=active]:shadow-sm"
+          >
+            Storyboard
+          </TabsTrigger>
+          <TabsTrigger
+            value="audiobook"
+            className="flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-green-600 data-[state=active]:shadow-sm"
+          >
+            Audiobook
+          </TabsTrigger>
+        </TabsList>
 
-                                try {
-                                  // Add both paths to the swapping set
-                                  setSwappingImages(prev => new Set([...prev, version.path, item.image!.path]))
-                                  
-                                  await swapStoryboardImage({
-                                    originalPath: item.image!.path,
-                                    thumbnailPath: version.path
-                                  })
-                                  
-                                  await fetchProject()
-                                } catch (error) {
-                                  console.error('Error swapping images:', error)
-                                  toast.error(getUserFriendlyError(error))
-                                } finally {
-                                  setSwappingImages(prev => {
-                                    const next = new Set(prev)
-                                    next.delete(version.path)
-                                    next.delete(item.image!.path)
-                                    return next
-                                  })
-                                }
-                              }}
-                            >
-                              <Image 
-                                src={version.url}
-                                alt={`Version ${version.version}`}
-                                fill
-                                className={`object-cover rounded border bg-muted/10 ${
-                                  swappingImages.has(version.path) ? 'opacity-50' : ''
-                                }`}
-                                sizes="55px"
-                              />
-                              {swappingImages.has(version.path) && (
-                                <div className="absolute inset-0 flex items-center justify-center">
-                                  <div className="animate-spin h-4 w-4 border-2 border-primary rounded-full border-t-transparent" />
+        <div className="mt-4 bg-white rounded-lg p-6 shadow-sm">
+          <TabsContent value="intake">
+            <Card className="p-6 border-0 shadow-none">
+              <p className="text-3xl font-bold text-center">Intake Tab Here</p>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="storyboard">
+            <Card className="p-6 border-0 shadow-none">
+              {loading ? (
+                <div className="flex items-center justify-center min-h-[200px]">
+                  <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent"></div>
+                </div>
+              ) : items.length > 0 ? (
+                <div className="relative">
+                  <div
+                    ref={scrollContainerRef}
+                    className="flex gap-4 overflow-x-auto pb-4 scroll-smooth"
+                  >
+                    {items.map((item) => {
+                      if (!item.image?.url) return null
+                      return (
+                        <Card key={item.number} className="flex-shrink-0 w-[341px]">
+                          <CardContent className="p-2 space-y-2">
+                            <div className="relative">
+                              {item.image?.url && (
+                                <div className="relative w-full h-[597px]">
+                                  <Image 
+                                    src={item.image.url} 
+                                    alt={`Storyboard ${item.number}`}
+                                    fill
+                                    className={`object-cover rounded ${
+                                      swappingImages.has(item.image.path) ? 'opacity-50' : ''
+                                    }`}
+                                    priority={item.number <= 2}
+                                    sizes="(max-width: 768px) 100vw, 341px"
+                                  />
+                                  {swappingImages.has(item.image.path) && (
+                                    <div className="absolute inset-0 flex items-center justify-center">
+                                      <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent" />
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded">
+                                {item.number}
+                              </div>
+                            </div>
+                            
+                            <div className="flex gap-4 items-center mt-2">
+                              <div className="flex flex-col gap-2">
+                                {item.text?.content && (
+                                  <Button
+                                    variant="outline"
+                                    onClick={() => {
+                                      setSelectedText(item.text?.content || null)
+                                      setIsTextDialogOpen(true)
+                                    }}
+                                    className="flex items-center gap-2 text-sm"
+                                  >
+                                    <FileText className="h-4 w-4" />
+                                    View Text
+                                  </Button>
+                                )}
+                                <Button 
+                                  variant="outline" 
+                                  onClick={() => {
+                                    console.log("Sending request to the backend")
+                                  }}
+                                  className="whitespace-nowrap text-sm"
+                                >
+                                  New Image Set
+                                </Button>
+                              </div>
+                              <div className="flex gap-2 flex-1">
+                                {item.image?.savedVersions?.map((version) => (
+                                  <div 
+                                    key={version.version} 
+                                    className="relative w-[55px] h-[96px] cursor-pointer hover:opacity-80 transition-opacity"
+                                    onClick={async () => {
+                                      // Skip if already swapping this image
+                                      if (swappingImages.has(version.path)) return
+
+                                      try {
+                                        // Add both paths to the swapping set
+                                        setSwappingImages(prev => new Set([...prev, version.path, item.image!.path]))
+                                        
+                                        await swapStoryboardImage({
+                                          originalPath: item.image!.path,
+                                          thumbnailPath: version.path
+                                        })
+                                        
+                                        await fetchProject()
+                                      } catch (error) {
+                                        console.error('Error swapping images:', error)
+                                        toast.error(getUserFriendlyError(error))
+                                      } finally {
+                                        setSwappingImages(prev => {
+                                          const next = new Set(prev)
+                                          next.delete(version.path)
+                                          next.delete(item.image!.path)
+                                          return next
+                                        })
+                                      }
+                                    }}
+                                  >
+                                    <Image 
+                                      src={version.url}
+                                      alt={`Version ${version.version}`}
+                                      fill
+                                      className={`object-cover rounded border bg-muted/10 ${
+                                        swappingImages.has(version.path) ? 'opacity-50' : ''
+                                      }`}
+                                      sizes="55px"
+                                    />
+                                    {swappingImages.has(version.path) && (
+                                      <div className="absolute inset-0 flex items-center justify-center">
+                                        <div className="animate-spin h-4 w-4 border-2 border-primary rounded-full border-t-transparent" />
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                                {Array.from({ length: 3 - (item.image?.savedVersions?.length || 0) }).map((_, i) => (
+                                  <div 
+                                    key={i} 
+                                    className="border rounded bg-muted/10"
+                                    style={{ width: '55px', height: '96px' }}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                            
+                            <div className="border-t my-2" />
+                            
+                            <div className="space-y-2">
+                              {item.audio?.url ? (
+                                <div className="flex items-center gap-2">
+                                  <AudioPlayer
+                                    audioUrl={item.audio.url}
+                                  />
+                                  <Button
+                                    variant="outline"
+                                    onClick={() => handleTrackSelection(1, item)}
+                                    disabled={switchingTrack !== null}
+                                    className="flex-none text-xs -mt-3 relative"
+                                    style={{ width: '90px', height: '70px' }}
+                                  >
+                                    <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
+                                      primaryTrack === 1 ? 'bg-green-500' : 'bg-gray-300'
+                                    }`} />
+                                    {switchingTrack === 1 ? 'Waiting...' : 'Track 1'}
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    onClick={item.audio?.savedVersion ? () => handleTrackSelection(2, item) : () => handleNewAudio(item)}
+                                    disabled={generatingAudio.has(item.number) || switchingTrack !== null}
+                                    className="flex-none text-xs -mt-3 relative"
+                                    style={{ width: '90px', height: '70px' }}
+                                  >
+                                    <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
+                                      primaryTrack === 2 ? 'bg-green-500' : 'bg-gray-300'
+                                    }`} />
+                                    {switchingTrack === 2 
+                                      ? 'Waiting...' 
+                                      : generatingAudio.has(item.number)
+                                        ? 'Working...'
+                                        : item.audio?.savedVersion 
+                                          ? 'Track 2' 
+                                          : 'New Audio'
+                                  }
+                                  </Button>
+                                </div>
+                              ) : (
+                                <div className="h-[70px] flex items-center justify-center">
+                                  <p className="text-sm text-muted-foreground">Audio file not found</p>
                                 </div>
                               )}
                             </div>
-                          ))}
-                          {Array.from({ length: 3 - (item.image?.savedVersions?.length || 0) }).map((_, i) => (
-                            <div 
-                              key={i} 
-                              className="border rounded bg-muted/10"
-                              style={{ width: '55px', height: '96px' }}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                      
-                      <div className="border-t my-2" />
-                      
-                      <div className="space-y-2">
-                        {item.audio?.url ? (
-                          <div className="flex items-center gap-2">
-                            <AudioPlayer
-                              audioUrl={item.audio.url}
-                            />
-                            <Button
-                              variant="outline"
-                              onClick={() => handleTrackSelection(1, item)}
-                              disabled={switchingTrack !== null}
-                              className="flex-none text-xs -mt-3 relative"
-                              style={{ width: '90px', height: '70px' }}
-                            >
-                              <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
-                                primaryTrack === 1 ? 'bg-green-500' : 'bg-gray-300'
-                              }`} />
-                              {switchingTrack === 1 ? 'Waiting...' : 'Track 1'}
-                            </Button>
-                            <Button
-                              variant="outline"
-                              onClick={item.audio?.savedVersion ? () => handleTrackSelection(2, item) : () => handleNewAudio(item)}
-                              disabled={generatingAudio.has(item.number) || switchingTrack !== null}
-                              className="flex-none text-xs -mt-3 relative"
-                              style={{ width: '90px', height: '70px' }}
-                            >
-                              <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
-                                primaryTrack === 2 ? 'bg-green-500' : 'bg-gray-300'
-                              }`} />
-                              {switchingTrack === 2 
-                                ? 'Waiting...' 
-                                : generatingAudio.has(item.number)
-                                  ? 'Working...'
-                                  : item.audio?.savedVersion 
-                                    ? 'Track 2' 
-                                    : 'New Audio'
-                              }
-                            </Button>
-                          </div>
-                        ) : (
-                          <div className="h-[70px] flex items-center justify-center">
-                            <p className="text-sm text-muted-foreground">Audio file not found</p>
-                          </div>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                )
-              ))}
-            </div>
-            {items.length > 1 && (
-              <>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="absolute left-0 top-1/2 transform -translate-y-1/2 bg-background"
-                  onClick={() => scrollContainerRef.current?.scrollBy({ left: -341, behavior: 'smooth' })}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="absolute right-0 top-1/2 transform -translate-y-1/2 bg-background"
-                  onClick={() => scrollContainerRef.current?.scrollBy({ left: 341, behavior: 'smooth' })}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-                <Slider
-                  value={[sliderValue]}
-                  onValueChange={handleScrollSliderChange}
-                  max={100}
-                  step={1}
-                  className="w-full"
-                />
-              </>
-            )}
-          </div>
-        ) : (
-          <Card className="p-8 text-center">
-            <p className="text-muted-foreground">No storyboard images available yet.</p>
-          </Card>
-        )}
-      </div>
+                          </CardContent>
+                        </Card>
+                      )
+                    })}
+                  </div>
+                  {items.length > 1 && (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="absolute left-0 top-1/2 transform -translate-y-1/2 bg-background"
+                        onClick={() => scrollContainerRef.current?.scrollBy({ left: -341, behavior: 'smooth' })}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="absolute right-0 top-1/2 transform -translate-y-1/2 bg-background"
+                        onClick={() => scrollContainerRef.current?.scrollBy({ left: 341, behavior: 'smooth' })}
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                      <Slider
+                        value={[sliderValue]}
+                        onValueChange={handleScrollSliderChange}
+                        max={100}
+                        step={1}
+                        className="w-full"
+                      />
+                    </>
+                  )}
+                </div>
+              ) : (
+                <Card className="p-8 text-center">
+                  <p className="text-muted-foreground">No storyboard images available yet.</p>
+                </Card>
+              )}
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="audiobook">
+            <Card className="p-6 border-0 shadow-none">
+              <p className="text-3xl font-bold text-center">Audiobook Results Here</p>
+            </Card>
+          </TabsContent>
+        </div>
+      </Tabs>
 
       <Dialog open={isTextDialogOpen} onOpenChange={setIsTextDialogOpen}>
         <DialogContent className="max-w-2xl">
