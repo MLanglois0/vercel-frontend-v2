@@ -116,23 +116,25 @@ export default function ProjectDetail() {
         setCoverUrl(coverFile.url)
       }
 
-      // Filter out the cover image before grouping storyboard items
+      // Filter out the cover image and get only temp files for storyboard items
       const storyboardFiles = signedFiles.filter(file => 
+        file.path.includes('/temp/') && // Only include files from temp directory
         file.path !== project.cover_file_path && 
-        !file.path.endsWith('cover.jpg') // Additional check for cover images
+        !file.path.endsWith('cover.jpg')
       )
       console.log('Storyboard files after filtering:', storyboardFiles) // Debug filtered files
       
       // Continue with existing grouping logic for storyboard items
       const groupedItems = storyboardFiles.reduce((acc, file) => {
         const number = file.number
-        console.log('Processing file:', { path: file.path, type: file.type, number }) // Debug each file processing
+        console.log('Processing file:', { path: file.path, type: file.type, number })
 
         if (!acc[number]) {
           acc[number] = { number }
         }
         
         if (file.type === 'image') {
+          console.log('Processing IMAGE:', { path: file.path, number: file.number, version: file.version })
           if (file.version !== undefined) {
             // This is a saved version
             if (!acc[number].image) {
@@ -158,6 +160,7 @@ export default function ProjectDetail() {
           }
         }
         if (file.type === 'audio') {
+          console.log('Processing AUDIO:', { path: file.path, number: file.number })
           const match = file.path.match(/(\d+)(?:_sbsave)?\.mp3$/)
           if (match) {
             const audioNumber = parseInt(match[1])
@@ -174,6 +177,7 @@ export default function ProjectDetail() {
           }
         }
         if (file.type === 'text' && file.content) {
+          console.log('Processing TEXT:', { path: file.path, number: file.number })
           // Match number before .txt
           const match = file.path.match(/(\d+)\.txt$/)
           console.log('Text file match:', { path: file.path, match }) // Debug text file matching

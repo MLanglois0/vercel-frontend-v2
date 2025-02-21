@@ -42,45 +42,77 @@ export async function listProjectFiles(userId: string, projectId: string) {
 
 export async function getSignedImageUrls(userId: string, projectId: string): Promise<SignedFileResponse[]> {
   try {
-    const command = new ListObjectsV2Command({
+    // Get all files from base path (for cover and epub)
+    const baseCommand = new ListObjectsV2Command({
       Bucket: process.env.R2_BUCKET_NAME,
       Prefix: `${userId}/${projectId}/`,
+      Delimiter: '/' // Only get files in base directory
     })
 
-    const { Contents: files } = await r2Client.send(command)
-    if (!files) return []
+    // Get storyboard files from temp directory
+    const tempCommand = new ListObjectsV2Command({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Prefix: `${userId}/${projectId}/temp/`,
+      Delimiter: '/' // Only get files directly in temp
+    })
 
-    console.log('Files from R2:', files.map(f => f.Key))
+    const [baseResponse, tempResponse] = await Promise.all([
+      r2Client.send(baseCommand),
+      r2Client.send(tempCommand)
+    ])
+
+    const allFiles = [
+      ...(baseResponse.Contents || []),
+      ...(tempResponse.Contents || [])
+    ]
+
+    if (!allFiles.length) return []
+
+    console.log('Base directory files:', baseResponse.Contents?.map(f => f.Key))
+    console.log('Temp directory files:', tempResponse.Contents?.map(f => f.Key))
 
     const signedUrls = await Promise.all(
-      files.map(async (file): Promise<SignedFileResponse | null> => {
+      allFiles.map(async (file): Promise<SignedFileResponse | null> => {
         if (!file.Key) return null
 
         const fileName = file.Key.split('/').pop() || ''
         
-        // Extract the last number before file extension or sbsave
+        // Handle files based on their location
+        const isInTemp = file.Key.includes('/temp/')
+
+        // For storyboard files (in temp), extract number from filename
         let number = 0
-        const numberMatch = fileName.match(/(\d+)(?:_image|\.|_chunk)/)
-        if (numberMatch) {
-          number = parseInt(numberMatch[1])
-        }
-        
-        // Determine file type and handle special cases
         let type: FileType
         let content: string | undefined
         let version: number | undefined
 
         if (/\.(jpg|jpeg|png|webp)$/i.test(fileName)) {
           type = 'image'
-          // Check for sbsave version
-          const saveMatch = fileName.match(/_(\d+)sbsave\.[^.]+$/)
-          if (saveMatch) {
-            version = parseInt(saveMatch[1])
+          if (isInTemp) {
+            // Updated pattern to match _sbsaveX.jpg
+            const saveMatch = fileName.match(/image(\d+)_sbsave(\d+)\.jpg$/)
+            if (saveMatch) {
+              // The image number is in saveMatch[1]
+              // The sbsave version is in saveMatch[2]
+              number = parseInt(saveMatch[1])  // This matches the main image number
+              version = parseInt(saveMatch[2]) // This is the sbsave version number
+            } else {
+              // For main images, just get the number
+              const mainMatch = fileName.match(/image(\d+)\.jpg$/)
+              if (mainMatch) number = parseInt(mainMatch[1])
+            }
           }
         }
-        else if (/\.mp3$/i.test(fileName)) type = 'audio'
-        else if (/\.txt$/i.test(fileName)) {
+        else if (/\.mp3$/.test(fileName)) {
+          type = 'audio'
+          const match = fileName.match(/(\d+)\.mp3$/)
+          if (match) number = parseInt(match[1])
+        }
+        else if (/\.txt$/.test(fileName)) {
           type = 'text'
+          const match = fileName.match(/chunk(\d+)\.txt$/)
+          if (match) number = parseInt(match[1])
+          
           const getCommand = new GetObjectCommand({
             Bucket: process.env.R2_BUCKET_NAME,
             Key: file.Key,
@@ -89,10 +121,12 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
           content = await response.Body?.transformToString()
           console.log('Text file found:', { fileName, number, content })
         }
-        else if (/\.epub$/i.test(fileName)) type = 'epub'
+        else if (/\.epub$/.test(fileName)) {
+          type = 'epub'
+        }
         else return null
 
-        console.log('Processing file:', { fileName, type, number, version })
+        console.log('Processing file:', { fileName, type, number, version, isInTemp })
 
         return {
           url: await getSignedUrl(r2Client, new GetObjectCommand({
@@ -114,7 +148,8 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
       number: f.number,
       version: f.version,
       path: f.path, 
-      hasContent: !!f.content 
+      hasContent: !!f.content,
+      isInTemp: f.path.includes('/temp/')
     })))
 
     return filtered

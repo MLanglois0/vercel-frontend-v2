@@ -14,4 +14,8 @@ export const r2Client = new S3Client({
   }
 })
 
-export const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME 
+export const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME
+
+export function getProjectBasePath(userId: string, projectId: string) {
+  return `${userId}/${projectId}/`
+} 
