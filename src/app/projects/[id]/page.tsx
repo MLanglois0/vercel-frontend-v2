@@ -16,6 +16,7 @@ import { getUserFriendlyError } from '@/lib/error-handler'
 import { Input } from "@/components/ui/input"
 import Image from 'next/image'
 import { Textarea } from "@/components/ui/textarea"
+import { sendCommand } from '@/app/actions/remote-commands'
 
 interface Project {
   id: string
@@ -435,6 +436,72 @@ export default function ProjectDetail() {
     }
   };
 
+  const handleProcessEpub = async () => {
+    try {
+      // Get current user session
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No session')
+      
+      // Check if project exists
+      if (!project) throw new Error('Project not found')
+
+      // Construct the command with actual IDs
+      const command = `python3 b2vp* -f "Walker.epub" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -si`
+      
+      console.log('Starting command:', command)
+      await sendCommand(command)
+      
+      toast.success('Processing started')
+    } catch (error) {
+      console.error('Error processing epub:', error)
+      toast.error('Failed to start processing')
+    }
+  }
+
+  const handleGenerateStoryboard = async () => {
+    try {
+      // Get current user session
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No session')
+      
+      // Check if project exists
+      if (!project) throw new Error('Project not found')
+
+      // Construct the command with -ss switch
+      const command = `python3 b2vp* -f "Walker.epub" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -ss`
+      
+      console.log('Starting command:', command)
+      await sendCommand(command)
+      
+      toast.success('Generation started')
+    } catch (error) {
+      console.error('Error generating storyboard:', error)
+      toast.error('Failed to start generation')
+    }
+  }
+
+  const handleGenerateAudiobook = async () => {
+    try {
+      // Get current user session
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No session')
+      
+      // Check if project exists
+      if (!project) throw new Error('Project not found')
+
+      // Construct the command with -sb switch
+      const command = `python3 b2vp* -f "Walker.epub" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -sb`
+      
+      console.log('Starting command:', command)
+      await sendCommand(command)
+      
+      toast.success('Generation started')
+    } catch (error) {
+      console.error('Error generating audiobook:', error)
+      toast.error('Failed to start generation')
+    }
+  }
+
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
 
@@ -502,7 +569,7 @@ export default function ProjectDetail() {
                 <p className="text-3xl font-bold">Intake Tab Here</p>
                 <Button 
                   variant="outline"
-                  onClick={() => console.log("Process Epub File button clicked")}
+                  onClick={handleProcessEpub}
                 >
                   Process Epub File
                 </Button>
@@ -516,7 +583,7 @@ export default function ProjectDetail() {
                 <h3 className="text-2xl font-semibold">Storyboard</h3>
                 <Button 
                   variant="outline"
-                  onClick={() => console.log("Generate Storyboard button clicked")}
+                  onClick={handleGenerateStoryboard}
                 >
                   Generate Storyboard
                 </Button>
@@ -733,7 +800,16 @@ export default function ProjectDetail() {
 
           <TabsContent value="audiobook">
             <Card className="p-6 border-0 shadow-none">
-              <p className="text-3xl font-bold text-center">Audiobook Results Here</p>
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-2xl font-semibold">Audiobook</h3>
+                <Button 
+                  variant="outline"
+                  onClick={handleGenerateAudiobook}
+                >
+                  Generate Audiobook
+                </Button>
+              </div>
+              <p className="text-muted-foreground text-center">Audiobook content will appear here</p>
             </Card>
           </TabsContent>
         </div>
