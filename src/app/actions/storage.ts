@@ -21,6 +21,20 @@ interface UploadResult {
   path: string
 }
 
+interface ProjectStatus {
+  Project: {
+    Name: string
+    Book: string
+    notify: string
+    userid: string
+    projectid: string
+    Project_Status: string
+  }
+  Ebook_Prep_Status: string
+  Storyboard_Status: string
+  Audiobook_Status: string
+}
+
 export async function listProjectFiles(userId: string, projectId: string) {
   try {
     const command = new ListObjectsV2Command({
@@ -316,6 +330,85 @@ export async function swapStoryboardImage({
   } catch (error) {
     console.error('Error swapping storyboard images:', error)
     throw new Error(getUserFriendlyError(error))
+  }
+}
+
+export async function updateProjectStatus({
+  userId,
+  projectId,
+  status
+}: {
+  userId: string
+  projectId: string
+  status: ProjectStatus
+}): Promise<void> {
+  try {
+    const statusFilePath = `${userId}/${projectId}/project_status.json`
+    const statusContent = JSON.stringify(status, null, 2)
+    
+    // First try to delete the existing file if it exists
+    try {
+      await r2Client.send(new DeleteObjectCommand({
+        Bucket: process.env.R2_BUCKET_NAME,
+        Key: statusFilePath
+      }))
+    } catch (error) {
+      // Ignore error if file doesn't exist
+      if (error instanceof Error && 'name' in error && error.name !== 'NoSuchKey') {
+        console.error('Error deleting existing status file:', error)
+      }
+    }
+
+    // Then create new file
+    const putCommand = new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: statusFilePath,
+      Body: statusContent,
+      ContentType: 'application/json'
+    })
+
+    await r2Client.send(putCommand)
+    console.log('Status file updated:', statusFilePath)
+  } catch (error) {
+    console.error('Error updating status file:', error)
+    throw error
+  }
+}
+
+export async function getProjectStatus({
+  userId,
+  projectId
+}: {
+  userId: string
+  projectId: string
+}): Promise<ProjectStatus | null> {
+  try {
+    const statusFilePath = `${userId}/${projectId}/project_status.json`
+    
+    const getCommand = new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: statusFilePath
+    })
+
+    try {
+      const response = await r2Client.send(getCommand)
+      const statusContent = await response.Body?.transformToString()
+      
+      if (statusContent) {
+        return JSON.parse(statusContent) as ProjectStatus
+      }
+    } catch (error) {
+      // Type the error properly
+      if (error instanceof Error && 'name' in error && error.name === 'NoSuchKey') {
+        return null
+      }
+      throw error
+    }
+
+    return null
+  } catch (error) {
+    console.error('Error reading status file:', error)
+    throw error
   }
 }
 

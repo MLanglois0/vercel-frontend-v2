@@ -9,7 +9,7 @@ import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ChevronLeft, ChevronRight, FileText } from "lucide-react"
 import { toast } from 'sonner'
-import { getSignedImageUrls, deleteProjectFile, saveAudioHistory, swapStoryboardImage, uploadProjectFile } from '@/app/actions/storage'
+import { getSignedImageUrls, deleteProjectFile, saveAudioHistory, swapStoryboardImage, uploadProjectFile, updateProjectStatus, getProjectStatus } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
 import { getUserFriendlyError } from '@/lib/error-handler'
@@ -53,6 +53,20 @@ interface StoryboardItem {
   }
 }
 
+interface ProjectStatus {
+  Project: {
+    Name: string
+    Book: string
+    notify: string
+    userid: string
+    projectid: string
+    Project_Status: string
+  }
+  Ebook_Prep_Status: string
+  Storyboard_Status: string
+  Audiobook_Status: string
+}
+
 export default function ProjectDetail() {
   const params = useParams()
   const [project, setProject] = useState<Project | null>(null)
@@ -80,6 +94,7 @@ export default function ProjectDetail() {
   const [selectedNewCover, setSelectedNewCover] = useState<File | null>(null)
   const [isEditing, setIsEditing] = useState(false)
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
+  const [projectStatus, setProjectStatus] = useState<ProjectStatus | null>(null)
 
   const fetchProject = useCallback(async () => {
     try {
@@ -99,6 +114,17 @@ export default function ProjectDetail() {
       console.log('Cover file path:', project.cover_file_path) // Log cover path
 
       setProject(project)
+
+      // Get initial project status
+      const status = await getProjectStatus({
+        userId: session.user.id,
+        projectId: project.id
+      })
+      
+      if (status) {
+        setProjectStatus(status)
+        console.log('Initial project status:', status)
+      }
 
       // Get signed URLs from R2 through server action
       const signedFiles = await getSignedImageUrls(session.user.id, project.id)
@@ -252,6 +278,34 @@ export default function ProjectDetail() {
   useEffect(() => {
     fetchProject()
   }, [fetchProject])
+
+  // Update polling to start after initial fetch
+  useEffect(() => {
+    if (!project) return
+
+    // Start polling every 5 seconds
+    const interval = setInterval(async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session) return
+
+        const status = await getProjectStatus({
+          userId: session.user.id,
+          projectId: project.id
+        })
+        
+        if (status) {
+          setProjectStatus(status)
+          console.log('Updated project status:', status)
+        }
+      } catch (error) {
+        console.error('Error polling status:', error)
+      }
+    }, 5000)
+
+    // Cleanup on unmount or when project changes
+    return () => clearInterval(interval)
+  }, [project])
 
   const handleScrollSliderChange = (value: number[]) => {
     setSliderValue(value[0])
@@ -438,19 +492,30 @@ export default function ProjectDetail() {
 
   const handleProcessEpub = async () => {
     try {
-      // Get current user session
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('No session')
-      
-      // Check if project exists
       if (!project) throw new Error('Project not found')
 
-      // Construct the command with actual IDs
+      await updateProjectStatus({
+        userId: session.user.id,
+        projectId: project.id,
+        status: {
+          Project: {
+            Name: project.project_name,
+            Book: project.book_title,
+            notify: session.user.email || '',
+            userid: session.user.id,
+            projectid: project.id,
+            Project_Status: "Processing Ebook"
+          },
+          Ebook_Prep_Status: "Processing ebook file",
+          Storyboard_Status: "Waiting for Ebook Processing Completion",
+          Audiobook_Status: "Waiting for Storyboard Completion"
+        }
+      })
+
       const command = `python3 b2vp* -f "Walker.epub" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -si`
-      
-      console.log('Starting command:', command)
       await sendCommand(command)
-      
       toast.success('Processing started')
     } catch (error) {
       console.error('Error processing epub:', error)
@@ -460,19 +525,30 @@ export default function ProjectDetail() {
 
   const handleGenerateStoryboard = async () => {
     try {
-      // Get current user session
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('No session')
-      
-      // Check if project exists
       if (!project) throw new Error('Project not found')
 
-      // Construct the command with -ss switch
+      await updateProjectStatus({
+        userId: session.user.id,
+        projectId: project.id,
+        status: {
+          Project: {
+            Name: project.project_name,
+            Book: project.book_title,
+            notify: session.user.email || '',
+            userid: session.user.id,
+            projectid: project.id,
+            Project_Status: "Generating Storyboard"
+          },
+          Ebook_Prep_Status: "Ebook processing complete",
+          Storyboard_Status: "Generating storyboard",
+          Audiobook_Status: "Waiting for Storyboard Completion"
+        }
+      })
+
       const command = `python3 b2vp* -f "Walker.epub" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -ss`
-      
-      console.log('Starting command:', command)
       await sendCommand(command)
-      
       toast.success('Generation started')
     } catch (error) {
       console.error('Error generating storyboard:', error)
@@ -482,19 +558,30 @@ export default function ProjectDetail() {
 
   const handleGenerateAudiobook = async () => {
     try {
-      // Get current user session
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('No session')
-      
-      // Check if project exists
       if (!project) throw new Error('Project not found')
 
-      // Construct the command with -sb switch
+      await updateProjectStatus({
+        userId: session.user.id,
+        projectId: project.id,
+        status: {
+          Project: {
+            Name: project.project_name,
+            Book: project.book_title,
+            notify: session.user.email || '',
+            userid: session.user.id,
+            projectid: project.id,
+            Project_Status: "Generating Audiobook"
+          },
+          Ebook_Prep_Status: "Ebook processing complete",
+          Storyboard_Status: "Storyboard generation complete",
+          Audiobook_Status: "Generating audiobook"
+        }
+      })
+
       const command = `python3 b2vp* -f "Walker.epub" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -sb`
-      
-      console.log('Starting command:', command)
       await sendCommand(command)
-      
       toast.success('Generation started')
     } catch (error) {
       console.error('Error generating audiobook:', error)
@@ -524,10 +611,24 @@ export default function ProjectDetail() {
 
         {/* Project Info and Actions */}
         <div className="flex flex-1 justify-between">
-          <div>
+          <div className="space-y-2">
             <h1 className="text-2xl font-bold">{project?.project_name}</h1>
-            <p className="text-muted-foreground">{project?.book_title}</p>
-            <p className="text-muted-foreground mt-2">{project?.description}</p>
+            <p className="text-sm">
+              <span className="font-medium">Book: </span>
+              <span className="text-gray-700">{project?.book_title}</span>
+            </p>
+            <p className="text-sm">
+              <span className="font-medium">Description: </span>
+              <span className="text-gray-700">{project?.description}</span>
+            </p>
+            {projectStatus && (
+              <p className="text-sm">
+                <span className="font-medium">Project Status: </span>
+                <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md">
+                  {projectStatus.Project.Project_Status}
+                </span>
+              </p>
+            )}
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setIsEditDialogOpen(true)}>
@@ -540,7 +641,7 @@ export default function ProjectDetail() {
         </div>
       </div>
 
-      <Tabs defaultValue="storyboard" className="w-full">
+      <Tabs defaultValue="intake" className="w-full">
         <TabsList className="flex w-full bg-gray-100 p-1 rounded-lg">
           <TabsTrigger
             value="intake"
@@ -565,6 +666,13 @@ export default function ProjectDetail() {
         <div className="mt-4 bg-white rounded-lg p-6 shadow-sm">
           <TabsContent value="intake">
             <Card className="p-6 border-0 shadow-none">
+              {projectStatus && (
+                <div className="mb-4">
+                  <span className="bg-green-50 text-green-700 px-3 py-1.5 rounded-md inline-block">
+                    Status: {projectStatus.Ebook_Prep_Status}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between items-center mb-6">
                 <p className="text-3xl font-bold">Intake Tab Here</p>
                 <Button 
@@ -579,6 +687,13 @@ export default function ProjectDetail() {
 
           <TabsContent value="storyboard">
             <Card className="p-6 border-0 shadow-none">
+              {projectStatus && (
+                <div className="mb-4">
+                  <span className="bg-green-50 text-green-700 px-3 py-1.5 rounded-md inline-block">
+                    Status: {projectStatus.Storyboard_Status}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-2xl font-semibold">Storyboard</h3>
                 <Button 
@@ -800,6 +915,13 @@ export default function ProjectDetail() {
 
           <TabsContent value="audiobook">
             <Card className="p-6 border-0 shadow-none">
+              {projectStatus && (
+                <div className="mb-4">
+                  <span className="bg-green-50 text-green-700 px-3 py-1.5 rounded-md inline-block">
+                    Status: {projectStatus.Audiobook_Status}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-2xl font-semibold">Audiobook</h3>
                 <Button 

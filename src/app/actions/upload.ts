@@ -3,6 +3,7 @@
 import { supabaseAdmin } from '@/lib/server/supabase-admin'
 import { uploadProjectFile } from './storage'
 import { getUserFriendlyError } from '@/lib/error-handler'
+import { updateProjectStatus } from './storage'
 
 export async function uploadFile(formData: FormData, userId: string) {
   try {
@@ -14,6 +15,10 @@ export async function uploadFile(formData: FormData, userId: string) {
 
     if (!file || !cover) throw new Error('Missing required files')
     if (!file.name || !cover.name) throw new Error('File names are required')
+
+    // Get user email for notifications
+    const { data: { user } } = await supabaseAdmin.auth.admin.getUserById(userId)
+    if (!user?.email) throw new Error('User email not found')
 
     // Create project using supabaseAdmin
     const { data: project, error: projectError } = await supabaseAdmin
@@ -32,7 +37,26 @@ export async function uploadFile(formData: FormData, userId: string) {
 
     if (projectError) throw projectError
 
-    // Upload files to R2 - pass blobs directly with original filenames
+    // Create initial status file
+    await updateProjectStatus({
+      userId,
+      projectId: project.id,
+      status: {
+        Project: {
+          Name: projectName,
+          Book: bookTitle,
+          notify: user.email,
+          userid: userId,
+          projectid: project.id,
+          Project_Status: "Ready to Process Ebook"
+        },
+        Ebook_Prep_Status: "Ready to process ebook",
+        Storyboard_Status: "Waiting for Ebook Processing Completion",
+        Audiobook_Status: "Waiting for Storyboard Completion"
+      }
+    })
+
+    // Upload files to R2
     const { path: epubPath } = await uploadProjectFile(
       file,
       userId,
@@ -49,7 +73,7 @@ export async function uploadFile(formData: FormData, userId: string) {
       cover.type
     )
 
-    // Update project with file paths using supabaseAdmin
+    // Update project with file paths
     const { error: updateError } = await supabaseAdmin
       .from('projects')
       .update({

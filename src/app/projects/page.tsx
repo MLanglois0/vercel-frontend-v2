@@ -12,7 +12,7 @@ import { uploadFile } from '@/app/actions/upload'
 import { useRouter } from 'next/navigation';
 import { getUserFriendlyError } from '@/lib/error-handler'
 import Image from 'next/image';
-import { getSignedImageUrls } from '@/app/actions/storage'
+import { getSignedImageUrls, getProjectStatus } from '@/app/actions/storage'
 
 interface Project {
   id: string;
@@ -24,6 +24,18 @@ interface Project {
   status: string;
   user_id: string;
   created_at: string;
+}
+
+interface ProjectStatus {
+  Project: {
+    Name: string
+    Book: string
+    notify: string
+    Project_Status: string
+  }
+  Ebook_Prep_Status: string
+  Storyboard_Status: string
+  Audiobook_Status: string
 }
 
 export default function Projects() {
@@ -40,6 +52,7 @@ export default function Projects() {
   });
   const [isCreating, setIsCreating] = useState(false);
   const router = useRouter();
+  const [projectStatuses, setProjectStatuses] = useState<Record<string, ProjectStatus>>({});
 
   useEffect(() => {
     fetchProjects();
@@ -61,6 +74,23 @@ export default function Projects() {
     } else {
       setProjects(data || [])
       
+      // Fetch status for each project
+      const statuses: Record<string, ProjectStatus> = {}
+      for (const project of data || []) {
+        try {
+          const status = await getProjectStatus({
+            userId: session.user.id,
+            projectId: project.id
+          })
+          if (status) {
+            statuses[project.id] = status
+          }
+        } catch (error) {
+          console.error('Error getting project status:', error)
+        }
+      }
+      setProjectStatuses(statuses)
+
       // Get signed URLs for all cover images
       for (const project of data || []) {
         if (project.cover_file_path) {
@@ -274,19 +304,29 @@ export default function Projects() {
                     />
                   </div>
                 )}
-                <div className="flex flex-col flex-1 h-full">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-center text-xl">{project.project_name}</CardTitle>
+                <div className="flex flex-col flex-1 h-full py-3">
+                  <CardHeader className="pb-1 pt-0">
+                    <CardTitle className="text-xl text-left">{project.project_name}</CardTitle>
                   </CardHeader>
-                  <CardContent className="flex-1 pb-2">
-                    <p className="text-sm font-medium mb-2">
-                      Book Name: <span className="text-muted-foreground">{project.book_title}</span>
-                    </p>
-                    <p className="text-sm text-muted-foreground line-clamp-2">
-                      {project.description}
-                    </p>
+                  <CardContent className="flex-1 py-1">
+                    <div className="space-y-1.5">
+                      <p className="text-sm">
+                        <span className="font-medium">Book: </span>
+                        <span className="text-gray-700">{project.book_title}</span>
+                      </p>
+                      <p className="text-sm">
+                        <span className="font-medium">Description: </span>
+                        <span className="text-gray-700">{project.description}</span>
+                      </p>
+                      <p className="text-sm">
+                        <span className="font-medium">Project Status: </span>
+                        <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md">
+                          {projectStatuses[project.id]?.Project.Project_Status || 'Loading...'}
+                        </span>
+                      </p>
+                    </div>
                   </CardContent>
-                  <CardFooter className="pt-0">
+                  <CardFooter className="pt-0 pb-0">
                     <Button 
                       variant="outline" 
                       className="w-full"
