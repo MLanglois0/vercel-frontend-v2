@@ -441,32 +441,48 @@ export async function getProjectStatus({
 export async function deleteProjectFolder(userId: string, projectId: string): Promise<void> {
   const prefix = `${userId}/${projectId}/`
   console.log('Deleting project folder recursively:', prefix)
+  let totalDeleted = 0
 
   try {
-    // First get all objects under the prefix
-    const listCommand = new ListObjectsV2Command({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Prefix: prefix,
-      MaxKeys: 1000 // Adjust if needed
-    })
+    let continuationToken: string | undefined
+    
+    do {
+      // Get batch of objects
+      const listCommand = new ListObjectsV2Command({
+        Bucket: process.env.R2_BUCKET_NAME,
+        Prefix: prefix,
+        MaxKeys: 1000,
+        ContinuationToken: continuationToken
+      })
 
-    const { Contents } = await r2Client.send(listCommand)
-    if (!Contents || Contents.length === 0) {
-      console.log('No files found in folder:', prefix)
-      return
-    }
-
-    // Delete all objects in one batch
-    const deleteCommand = new DeleteObjectsCommand({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Delete: {
-        Objects: Contents.map(({ Key }) => ({ Key })).filter((obj): obj is { Key: string } => obj.Key !== undefined),
-        Quiet: true // Less verbose output
+      const { Contents, NextContinuationToken, IsTruncated } = await r2Client.send(listCommand)
+      
+      if (!Contents || Contents.length === 0) {
+        if (totalDeleted === 0) {
+          console.log('No files found in folder:', prefix)
+        }
+        break
       }
-    })
 
-    await r2Client.send(deleteCommand)
-    console.log(`Successfully deleted ${Contents.length} files from folder:`, prefix)
+      // Delete batch of objects
+      const deleteCommand = new DeleteObjectsCommand({
+        Bucket: process.env.R2_BUCKET_NAME,
+        Delete: {
+          Objects: Contents.map(({ Key }) => ({ Key })).filter((obj): obj is { Key: string } => obj.Key !== undefined),
+          Quiet: true
+        }
+      })
+
+      await r2Client.send(deleteCommand)
+      totalDeleted += Contents.length
+      console.log(`Deleted batch of ${Contents.length} files. Total deleted: ${totalDeleted}`)
+
+      // Set up next batch if there are more files
+      continuationToken = IsTruncated ? NextContinuationToken : undefined
+
+    } while (continuationToken)
+
+    console.log(`Successfully deleted ${totalDeleted} total files from folder:`, prefix)
   } catch (error) {
     console.error('Error deleting project folder:', prefix, error)
     throw error
