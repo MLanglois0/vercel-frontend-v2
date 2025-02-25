@@ -9,7 +9,16 @@ import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ChevronLeft, ChevronRight, FileText } from "lucide-react"
 import { toast } from 'sonner'
-import { getSignedImageUrls, deleteProjectFile, saveAudioHistory, swapStoryboardImage, uploadProjectFile, updateProjectStatus, getProjectStatus } from '@/app/actions/storage'
+import { 
+  getSignedImageUrls, 
+  deleteProjectFile, 
+  saveAudioHistory, 
+  swapStoryboardImage, 
+  uploadProjectFile, 
+  updateProjectStatus, 
+  getProjectStatus, 
+  deleteProjectFolder 
+} from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
 import { getUserFriendlyError } from '@/lib/error-handler'
@@ -323,21 +332,8 @@ export default function ProjectDetail() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('No session')
 
-      // Delete all files in the project directory
-      const projectPath = `${session.user.id}/${project.id}/`
-      
-      // Get all files in the project directory
-      const { data: files } = await supabase
-        .storage
-        .from('projects')
-        .list(projectPath)
-
-      if (files && files.length > 0) {
-        // Delete all files in the directory
-        await Promise.all(
-          files.map(file => deleteProjectFile(`${projectPath}${file.name}`))
-        )
-      }
+      // Delete entire project folder
+      await deleteProjectFolder(session.user.id, project.id)
 
       // Delete project from database
       const { error } = await supabase
@@ -350,6 +346,7 @@ export default function ProjectDetail() {
       toast.success('Project deleted successfully')
       router.push('/projects')
     } catch (error) {
+      console.error('Error deleting project:', error)
       toast.error(getUserFriendlyError(error))
       setIsDeleting(false)
     }
@@ -496,6 +493,10 @@ export default function ProjectDetail() {
       if (!session) throw new Error('No session')
       if (!project) throw new Error('Project not found')
 
+      // Extract filename from epub_file_path
+      const epubFilename = project.epub_file_path.split('/').pop()
+      if (!epubFilename) throw new Error('EPUB filename not found')
+
       await updateProjectStatus({
         userId: session.user.id,
         projectId: project.id,
@@ -514,7 +515,7 @@ export default function ProjectDetail() {
         }
       })
 
-      const command = `python3 b2vp* -f "Walker.epub" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -si`
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -si`
       await sendCommand(command)
       toast.success('Processing started')
     } catch (error) {
@@ -528,6 +529,10 @@ export default function ProjectDetail() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('No session')
       if (!project) throw new Error('Project not found')
+
+      // Extract filename from epub_file_path
+      const epubFilename = project.epub_file_path.split('/').pop()
+      if (!epubFilename) throw new Error('EPUB filename not found')
 
       await updateProjectStatus({
         userId: session.user.id,
@@ -547,7 +552,7 @@ export default function ProjectDetail() {
         }
       })
 
-      const command = `python3 b2vp* -f "Walker.epub" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -ss`
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -ss`
       await sendCommand(command)
       toast.success('Generation started')
     } catch (error) {
@@ -561,6 +566,10 @@ export default function ProjectDetail() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('No session')
       if (!project) throw new Error('Project not found')
+
+      // Extract filename from epub_file_path
+      const epubFilename = project.epub_file_path.split('/').pop()
+      if (!epubFilename) throw new Error('EPUB filename not found')
 
       await updateProjectStatus({
         userId: session.user.id,
@@ -580,7 +589,7 @@ export default function ProjectDetail() {
         }
       })
 
-      const command = `python3 b2vp* -f "Walker.epub" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -sb`
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -sb`
       await sendCommand(command)
       toast.success('Generation started')
     } catch (error) {

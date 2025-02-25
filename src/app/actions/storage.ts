@@ -1,6 +1,6 @@
 'use server'
 
-import { PutObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3'
+import { PutObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectCommand, CopyObjectCommand, DeleteObjectsCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { r2Client } from '@/lib/r2'
 import { getUserFriendlyError } from '@/lib/error-handler'
@@ -37,19 +37,31 @@ interface ProjectStatus {
 
 export async function listProjectFiles(userId: string, projectId: string) {
   try {
-    const command = new ListObjectsV2Command({
+    console.log(`Listing files for user ${userId} and project ${projectId}`)
+    const listCommand = new ListObjectsV2Command({
       Bucket: process.env.R2_BUCKET_NAME,
-      Prefix: `${userId}/${projectId}/temp/`,
+      Prefix: `${userId}/${projectId}/`
     })
 
-    const { Contents: files } = await r2Client.send(command)
-    return files?.map(file => ({
-      name: file.Key?.split('/').pop() || '',
-      size: file.Size,
-      lastModified: file.LastModified,
-    })) || []
+    const { Contents: files } = await r2Client.send(listCommand)
+    console.log('Raw files from R2:', files?.map(f => f.Key))
+    if (!files) return []
+
+    const signedFiles = await Promise.all(
+      files.map(async (file): Promise<{ path: string } | null> => {
+        if (!file.Key) return null
+        console.log('Processing file for deletion:', file.Key)
+        return {
+          path: file.Key
+        }
+      })
+    )
+
+    const filtered = signedFiles.filter((file): file is NonNullable<typeof file> => file !== null)
+    console.log('Final list of files to process:', filtered.map(f => f.path))
+    return filtered
   } catch (error) {
-    console.error('Error listing files:', error)
+    console.error('Error listing project files:', error)
     throw error
   }
 }
@@ -228,15 +240,29 @@ export async function uploadProjectFile(
 }
 
 export async function deleteProjectFile(path: string): Promise<void> {
-  try {
-    const command = new DeleteObjectCommand({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Key: path,
-    })
+  // Ensure path starts with userId/projectId
+  if (!path.match(/^[^/]+\/[^/]+\//)) {
+    console.error('Invalid file path format:', path)
+    throw new Error('Invalid file path format. Path must start with userId/projectId/')
+  }
 
-    await r2Client.send(command)
+  console.log('Attempting to delete file:', path)
+  const command = new DeleteObjectCommand({
+    Bucket: process.env.R2_BUCKET_NAME,
+    Key: path,
+  })
+
+  console.log('Delete command:', {
+    bucket: process.env.R2_BUCKET_NAME,
+    key: path
+  })
+
+  try {
+    const response = await r2Client.send(command)
+    console.log('Delete response:', response)
+    console.log('Successfully deleted file:', path)
   } catch (error) {
-    console.error('Error deleting file:', error)
+    console.error('Error deleting file:', path, error)
     throw error
   }
 }
@@ -408,6 +434,41 @@ export async function getProjectStatus({
     return null
   } catch (error) {
     console.error('Error reading status file:', error)
+    throw error
+  }
+}
+
+export async function deleteProjectFolder(userId: string, projectId: string): Promise<void> {
+  const prefix = `${userId}/${projectId}/`
+  console.log('Deleting project folder recursively:', prefix)
+
+  try {
+    // First get all objects under the prefix
+    const listCommand = new ListObjectsV2Command({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Prefix: prefix,
+      MaxKeys: 1000 // Adjust if needed
+    })
+
+    const { Contents } = await r2Client.send(listCommand)
+    if (!Contents || Contents.length === 0) {
+      console.log('No files found in folder:', prefix)
+      return
+    }
+
+    // Delete all objects in one batch
+    const deleteCommand = new DeleteObjectsCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Delete: {
+        Objects: Contents.map(({ Key }) => ({ Key })).filter((obj): obj is { Key: string } => obj.Key !== undefined),
+        Quiet: true // Less verbose output
+      }
+    })
+
+    await r2Client.send(deleteCommand)
+    console.log(`Successfully deleted ${Contents.length} files from folder:`, prefix)
+  } catch (error) {
+    console.error('Error deleting project folder:', prefix, error)
     throw error
   }
 }
