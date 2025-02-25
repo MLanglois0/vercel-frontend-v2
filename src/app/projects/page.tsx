@@ -236,45 +236,36 @@ export default function Projects() {
                 placeholder="Enter project description"
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Upload EPUB File *</label>
-              <p className="text-sm text-gray-500 mb-2">Only .epub files are supported</p>
-              <div className="mt-1 flex items-center">
-                <Input
-                  type="file"
+            <div className="grid gap-4">
+              <div className="flex flex-col gap-2">
+                <label htmlFor="epub" className="text-sm font-medium">
+                  EPUB File
+                </label>
+                <Input 
+                  id="epub"
+                  type="file" 
                   accept=".epub"
                   onChange={handleFileSelect}
-                  disabled={isCreating}
-                  required
-                  className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"
+                  className="h-[40px] text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 
+                            file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 
+                            hover:file:bg-violet-100"
                 />
               </div>
-              {selectedFile && (
-                <p className="text-sm text-green-600 mt-2">
-                  Selected file: {selectedFile.name}
-                </p>
-              )}
-              {isCreating && <p className="text-sm text-gray-500 mt-2">Creating project...</p>}
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Upload Cover Image *</label>
-              <p className="text-sm text-gray-500 mb-2">JPG, PNG, or WebP files supported</p>
-              <div className="mt-1 flex items-center">
-                <Input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
+
+              <div className="flex flex-col gap-2">
+                <label htmlFor="cover" className="text-sm font-medium">
+                  Cover Image
+                </label>
+                <Input 
+                  id="cover"
+                  type="file" 
+                  accept="image/*"
                   onChange={handleCoverSelect}
-                  disabled={isCreating}
-                  required
-                  className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"
+                  className="h-[40px] text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 
+                            file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 
+                            hover:file:bg-violet-100"
                 />
               </div>
-              {selectedCover && (
-                <p className="text-sm text-green-600 mt-2">
-                  Selected cover: {selectedCover.name}
-                </p>
-              )}
-              {isCreating && <p className="text-sm text-gray-500 mt-2">Creating project...</p>}
             </div>
             <Button 
               onClick={handleCreateProject} 
