@@ -63,17 +63,15 @@ interface StoryboardItem {
 }
 
 interface ProjectStatus {
-  Project: {
-    Name: string
-    Book: string
-    notify: string
-    userid: string
-    projectid: string
-    Project_Status: string
-  }
-  Ebook_Prep_Status: string
-  Storyboard_Status: string
-  Audiobook_Status: string
+  Project: string;
+  Book: string;
+  notify: string;
+  userid: string;
+  projectid: string;
+  Current_Status: string;
+  Ebook_Prep_Status: string;
+  Storyboard_Status: string;
+  Audiobook_Status: string;
 }
 
 export default function ProjectDetail() {
@@ -501,14 +499,12 @@ export default function ProjectDetail() {
         userId: session.user.id,
         projectId: project.id,
         status: {
-          Project: {
-            Name: project.project_name,
-            Book: project.book_title,
-            notify: session.user.email || '',
-            userid: session.user.id,
-            projectid: project.id,
-            Project_Status: "Ebook is Processing"
-          },
+          Project: project.project_name,
+          Book: project.book_title,
+          notify: session.user.email || '',
+          userid: session.user.id,
+          projectid: project.id,
+          Current_Status: "Ebook is Processing",
           Ebook_Prep_Status: "Processing Ebook File, Please Wait",
           Storyboard_Status: "Waiting for Ebook Processing Completion",
           Audiobook_Status: "Waiting for Storyboard Completion"
@@ -541,14 +537,12 @@ export default function ProjectDetail() {
         userId: session.user.id,
         projectId: project.id,
         status: {
-          Project: {
-            Name: project.project_name,
-            Book: project.book_title,
-            notify: session.user.email || '',
-            userid: session.user.id,
-            projectid: project.id,
-            Project_Status: "Storyboard is Processing"
-          },
+          Project: project.project_name,
+          Book: project.book_title,
+          notify: session.user.email || '',
+          userid: session.user.id,
+          projectid: project.id,
+          Current_Status: "Storyboard is Processing",
           Ebook_Prep_Status: "Ebook Processing Complete",
           Storyboard_Status: "Processing Storyboard, Please Wait",
           Audiobook_Status: "Waiting for Storyboard Completion"
@@ -580,14 +574,12 @@ export default function ProjectDetail() {
         userId: session.user.id,
         projectId: project.id,
         status: {
-          Project: {
-            Name: project.project_name,
-            Book: project.book_title,
-            notify: session.user.email || '',
-            userid: session.user.id,
-            projectid: project.id,
-            Project_Status: "Audiobook is Processing"
-          },
+          Project: project.project_name,
+          Book: project.book_title,
+          notify: session.user.email || '',
+          userid: session.user.id,
+          projectid: project.id,
+          Current_Status: "Audiobook is Processing",
           Ebook_Prep_Status: "Ebook Processing Complete",
           Storyboard_Status: "Storyboard Complete",
           Audiobook_Status: "Audiobook Processing, Please Wait"
@@ -641,7 +633,7 @@ export default function ProjectDetail() {
               <p className="text-sm">
                 <span className="font-medium">Project Status: </span>
                 <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md">
-                  {projectStatus.Project.Project_Status}
+                  {projectStatus.Current_Status}
                 </span>
               </p>
             )}

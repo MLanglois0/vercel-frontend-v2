@@ -42,14 +42,12 @@ export async function uploadFile(formData: FormData, userId: string) {
       userId,
       projectId: project.id,
       status: {
-        Project: {
-          Name: projectName,
-          Book: bookTitle,
-          notify: user.email,
-          userid: userId,
-          projectid: project.id,
-          Project_Status: "Ready to Process Ebook"
-        },
+        Project: projectName,
+        Book: bookTitle,
+        notify: user.email,
+        userid: userId,
+        projectid: project.id,
+        Current_Status: "Ready to Process Ebook",
         Ebook_Prep_Status: "Ready to process ebook",
         Storyboard_Status: "Waiting for Ebook Processing Completion",
         Audiobook_Status: "Waiting for Storyboard Completion"

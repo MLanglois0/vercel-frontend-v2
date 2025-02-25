@@ -27,15 +27,15 @@ interface Project {
 }
 
 interface ProjectStatus {
-  Project: {
-    Name: string
-    Book: string
-    notify: string
-    Project_Status: string
-  }
-  Ebook_Prep_Status: string
-  Storyboard_Status: string
-  Audiobook_Status: string
+  Project: string;
+  Book: string;
+  notify: string;
+  userid: string;
+  projectid: string;
+  Current_Status: string;
+  Ebook_Prep_Status: string;
+  Storyboard_Status: string;
+  Audiobook_Status: string;
 }
 
 export default function Projects() {
@@ -69,27 +69,27 @@ export default function Projects() {
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('Error fetching projects:', error)
-      toast.error(getUserFriendlyError(error))
+      console.error('Error fetching projects:', error);
+      toast.error(getUserFriendlyError(error));
     } else {
-      setProjects(data || [])
-      
+      setProjects(data || []);
+
       // Fetch status for each project
-      const statuses: Record<string, ProjectStatus> = {}
+      const statuses: Record<string, ProjectStatus> = {};
       for (const project of data || []) {
         try {
           const status = await getProjectStatus({
             userId: session.user.id,
             projectId: project.id
-          })
+          });
           if (status) {
-            statuses[project.id] = status
+            statuses[project.id] = status;
           }
         } catch (error) {
-          console.error('Error getting project status:', error)
+          console.error('Error getting project status:', error);
         }
       }
-      setProjectStatuses(statuses)
+      setProjectStatuses(statuses);
 
       // Get signed URLs for all cover images
       for (const project of data || []) {
@@ -312,7 +312,7 @@ export default function Projects() {
                       <p className="text-sm">
                         <span className="font-medium">Project Status: </span>
                         <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md">
-                          {projectStatuses[project.id]?.Project.Project_Status || 'Loading...'}
+                          {projectStatuses[project.id]?.Current_Status || 'Loading...'}
                         </span>
                       </p>
                     </div>

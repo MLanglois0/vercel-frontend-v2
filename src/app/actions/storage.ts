@@ -22,17 +22,15 @@ interface UploadResult {
 }
 
 interface ProjectStatus {
-  Project: {
-    Name: string
-    Book: string
-    notify: string
-    userid: string
-    projectid: string
-    Project_Status: string
-  }
-  Ebook_Prep_Status: string
-  Storyboard_Status: string
-  Audiobook_Status: string
+  Project: string;
+  Book: string;
+  notify: string;
+  userid: string;
+  projectid: string;
+  Current_Status: string;
+  Ebook_Prep_Status: string;
+  Storyboard_Status: string;
+  Audiobook_Status: string;
 }
 
 export async function listProjectFiles(userId: string, projectId: string) {
