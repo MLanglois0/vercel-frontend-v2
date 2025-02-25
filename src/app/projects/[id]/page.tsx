@@ -507,13 +507,16 @@ export default function ProjectDetail() {
             notify: session.user.email || '',
             userid: session.user.id,
             projectid: project.id,
-            Project_Status: "Processing Ebook"
+            Project_Status: "Ebook is Processing"
           },
-          Ebook_Prep_Status: "Processing ebook file",
+          Ebook_Prep_Status: "Processing Ebook File, Please Wait",
           Storyboard_Status: "Waiting for Ebook Processing Completion",
           Audiobook_Status: "Waiting for Storyboard Completion"
         }
       })
+
+      // Force immediate status refresh
+      await fetchProject()
 
       const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -si`
       await sendCommand(command)
@@ -544,13 +547,15 @@ export default function ProjectDetail() {
             notify: session.user.email || '',
             userid: session.user.id,
             projectid: project.id,
-            Project_Status: "Generating Storyboard"
+            Project_Status: "Storyboard is Processing"
           },
-          Ebook_Prep_Status: "Ebook processing complete",
-          Storyboard_Status: "Generating storyboard",
+          Ebook_Prep_Status: "Ebook Processing Complete",
+          Storyboard_Status: "Processing Storyboard, Please Wait",
           Audiobook_Status: "Waiting for Storyboard Completion"
         }
       })
+
+      await fetchProject()
 
       const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -ss`
       await sendCommand(command)
@@ -581,13 +586,15 @@ export default function ProjectDetail() {
             notify: session.user.email || '',
             userid: session.user.id,
             projectid: project.id,
-            Project_Status: "Generating Audiobook"
+            Project_Status: "Audiobook is Processing"
           },
-          Ebook_Prep_Status: "Ebook processing complete",
-          Storyboard_Status: "Storyboard generation complete",
-          Audiobook_Status: "Generating audiobook"
+          Ebook_Prep_Status: "Ebook Processing Complete",
+          Storyboard_Status: "Storyboard Complete",
+          Audiobook_Status: "Audiobook Processing, Please Wait"
         }
       })
+
+      await fetchProject()
 
       const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -sb`
       await sendCommand(command)
