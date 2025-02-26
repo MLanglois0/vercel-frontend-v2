@@ -74,6 +74,50 @@ interface ProjectStatus {
   Audiobook_Status: string;
 }
 
+// Helper functions for button states
+function getIntakeButtonState(status: string | undefined) {
+  switch (status) {
+    case "Ready to process ebook":
+      return { enabled: true, label: "Process Ebook File" }
+    case "Processing Ebook File, Please Wait":
+      return { enabled: false, label: "Processing Ebook..." }
+    case "Ebook Processing Complete":
+      return { enabled: false, label: "Intake Complete" }
+    default:
+      return { enabled: false, label: "Process Ebook File" }
+  }
+}
+
+function getStoryboardButtonState(status: string | undefined) {
+  switch (status) {
+    case "Ready to Process Storyboard":
+      return { enabled: true, label: "Generate Storyboard" }
+    case "Processing Storyboard, Please Wait":
+      return { enabled: false, label: "Processing Storyboard..." }
+    case "Waiting for Ebook Processing Completion":
+      return { enabled: false, label: "Generate Audiobook" }
+    case "Storyboard Complete":
+      return { enabled: false, label: "Storyboard Complete" }
+    default:
+      return { enabled: false, label: "Generate Storyboard" }
+  }
+}
+
+function getAudiobookButtonState(status: string | undefined) {
+  switch (status) {
+    case "Ready to Process Audiobook":
+      return { enabled: true, label: "Generate Audiobook" }
+    case "Waiting for Storyboard Completion":
+      return { enabled: false, label: "Generate Audiobook" }
+    case "Audiobook Processing, Please Wait":
+      return { enabled: false, label: "Audiobook Processing..." }
+    case "Audiobook Complete":
+      return { enabled: false, label: "Audiobook Complete" }
+    default:
+      return { enabled: false, label: "Generate Audiobook" }
+  }
+}
+
 export default function ProjectDetail() {
   const params = useParams()
   const [project, setProject] = useState<Project | null>(null)
@@ -686,8 +730,9 @@ export default function ProjectDetail() {
                 <Button 
                   variant="outline"
                   onClick={handleProcessEpub}
+                  disabled={!getIntakeButtonState(projectStatus?.Ebook_Prep_Status).enabled}
                 >
-                  Process Epub File
+                  {getIntakeButtonState(projectStatus?.Ebook_Prep_Status).label}
                 </Button>
               </div>
             </Card>
@@ -707,8 +752,9 @@ export default function ProjectDetail() {
                 <Button 
                   variant="outline"
                   onClick={handleGenerateStoryboard}
+                  disabled={!getStoryboardButtonState(projectStatus?.Storyboard_Status).enabled}
                 >
-                  Generate Storyboard
+                  {getStoryboardButtonState(projectStatus?.Storyboard_Status).label}
                 </Button>
               </div>
               {loading ? (
@@ -935,8 +981,9 @@ export default function ProjectDetail() {
                 <Button 
                   variant="outline"
                   onClick={handleGenerateAudiobook}
+                  disabled={!getAudiobookButtonState(projectStatus?.Audiobook_Status).enabled}
                 >
-                  Generate Audiobook
+                  {getAudiobookButtonState(projectStatus?.Audiobook_Status).label}
                 </Button>
               </div>
               <p className="text-muted-foreground text-center">Audiobook content will appear here</p>
