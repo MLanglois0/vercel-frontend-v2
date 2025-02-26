@@ -17,7 +17,8 @@ import {
   uploadProjectFile, 
   updateProjectStatus, 
   getProjectStatus, 
-  deleteProjectFolder 
+  deleteProjectFolder,
+  listProjectFiles
 } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
@@ -118,6 +119,12 @@ function getAudiobookButtonState(status: string | undefined) {
   }
 }
 
+// Define a type for video files
+interface VideoFile {
+  url: string
+  path: string
+}
+
 export default function ProjectDetail() {
   const params = useParams()
   const [project, setProject] = useState<Project | null>(null)
@@ -146,6 +153,7 @@ export default function ProjectDetail() {
   const [isEditing, setIsEditing] = useState(false)
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
   const [projectStatus, setProjectStatus] = useState<ProjectStatus | null>(null)
+  const [videos, setVideos] = useState<VideoFile[]>([])
 
   const fetchProject = useCallback(async () => {
     try {
@@ -177,12 +185,47 @@ export default function ProjectDetail() {
         console.log('Initial project status:', status)
       }
 
-      // Get signed URLs from R2 through server action
+      // Step 1: Inventory files
+      const filePaths = await listProjectFiles(session.user.id, project.id)
+
+      // Determine which files to display
+      const relevantFilePaths = filePaths.map(file => file.path).filter(path => 
+        path.includes('/temp/') || path.includes('/output/')
+      )
+
+      // Step 2: Generate signed URLs for relevant files
       const signedFiles = await getSignedImageUrls(session.user.id, project.id)
       console.log('All signed files before filtering:', signedFiles) // Debug all files
       
+      // Filter signed files based on relevant paths
+      const storyboardFiles = signedFiles.filter(file => 
+        relevantFilePaths.includes(file.path) && file.type === 'image'
+      )
+
+      const audioFiles = signedFiles.filter(file => 
+        relevantFilePaths.includes(file.path) && file.type === 'audio'
+      )
+
+      // New: Filter video files from the output directory
+      const videoFiles = signedFiles.filter(file => 
+        file.path.startsWith(`${session.user.id}/${project.id}/output/`) && file.type === 'video'
+      )
+
+      // Set state for display
+      setItems(storyboardFiles)
+      setVideos(videoFiles.map(file => ({ url: file.url, path: file.path })))
+
+      // Log the arrays for debugging
+      console.log('Storyboard files:', storyboardFiles)
+      console.log('Audio files:', audioFiles)
+      console.log('Video files:', videoFiles)
+
+      // Get signed URLs from R2 through server action
+      const signedFilesBeforeFiltering = await getSignedImageUrls(session.user.id, project.id)
+      console.log('All signed files before filtering:', signedFilesBeforeFiltering) // Debug all files
+      
       // Find cover file first
-      const coverFile = signedFiles.find(file => 
+      const coverFile = signedFilesBeforeFiltering.find(file => 
         file.path === project.cover_file_path
       )
       
@@ -195,15 +238,15 @@ export default function ProjectDetail() {
       }
 
       // Filter out the cover image and get only temp files for storyboard items
-      const storyboardFiles = signedFiles.filter(file => 
+      const storyboardFilesAfterFiltering = signedFilesBeforeFiltering.filter(file => 
         file.path.includes('/temp/') && // Only include files from temp directory
         file.path !== project.cover_file_path && 
         !file.path.endsWith('cover.jpg')
       )
-      console.log('Storyboard files after filtering:', storyboardFiles) // Debug filtered files
+      console.log('Storyboard files after filtering:', storyboardFilesAfterFiltering) // Debug filtered files
       
       // Continue with existing grouping logic for storyboard items
-      const groupedItems = storyboardFiles.reduce((acc, file) => {
+      const groupedItems = storyboardFilesAfterFiltering.reduce((acc, file) => {
         const number = file.number
         console.log('Processing file:', { path: file.path, type: file.type, number })
 
@@ -986,7 +1029,28 @@ export default function ProjectDetail() {
                   {getAudiobookButtonState(projectStatus?.Audiobook_Status).label}
                 </Button>
               </div>
-              <p className="text-muted-foreground text-center">Audiobook content will appear here</p>
+              {videos.length > 0 ? (
+                <div className="relative">
+                  <div className="flex gap-4 overflow-x-auto pb-4 scroll-smooth">
+                    {videos.map((video, index) => (
+                      <Card key={index} className="flex-shrink-0 w-[341px]">
+                        <CardContent className="p-2 space-y-2">
+                          <div className="relative w-full h-[192px]">
+                            <video controls className="w-full h-full object-cover rounded">
+                              <source src={video.url} type="video/mp4" />
+                              Your browser does not support the video tag.
+                            </video>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <Card className="p-8 text-center">
+                  <p className="text-muted-foreground">No audiobook videos available yet.</p>
+                </Card>
+              )}
             </Card>
           </TabsContent>
         </div>

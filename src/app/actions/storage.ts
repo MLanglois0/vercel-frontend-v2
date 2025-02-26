@@ -14,7 +14,7 @@ interface SignedFileResponse {
   version?: number
 }
 
-type FileType = 'image' | 'audio' | 'text' | 'epub'
+type FileType = 'image' | 'audio' | 'text' | 'epub' | 'video'
 
 interface UploadResult {
   url: string
@@ -80,20 +80,30 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
       Delimiter: '/' // Only get files directly in temp
     })
 
-    const [baseResponse, tempResponse] = await Promise.all([
+    // Get video files from output directory
+    const outputCommand = new ListObjectsV2Command({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Prefix: `${userId}/${projectId}/output/`,
+      Delimiter: '/' // Only get files directly in output
+    })
+
+    const [baseResponse, tempResponse, outputResponse] = await Promise.all([
       r2Client.send(baseCommand),
-      r2Client.send(tempCommand)
+      r2Client.send(tempCommand),
+      r2Client.send(outputCommand)
     ])
 
     const allFiles = [
       ...(baseResponse.Contents || []),
-      ...(tempResponse.Contents || [])
+      ...(tempResponse.Contents || []),
+      ...(outputResponse.Contents || [])
     ]
 
     if (!allFiles.length) return []
 
     console.log('Base directory files:', baseResponse.Contents?.map(f => f.Key))
     console.log('Temp directory files:', tempResponse.Contents?.map(f => f.Key))
+    console.log('Output directory files:', outputResponse.Contents?.map(f => f.Key))
 
     const signedUrls = await Promise.all(
       allFiles.map(async (file): Promise<SignedFileResponse | null> => {
@@ -103,6 +113,7 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
         
         // Handle files based on their location
         const isInTemp = file.Key.includes('/temp/')
+        const isInOutput = file.Key.includes('/output/')
 
         // For storyboard files (in temp), extract number from filename
         let number = 0
@@ -113,15 +124,11 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
         if (/\.(jpg|jpeg|png|webp)$/i.test(fileName)) {
           type = 'image'
           if (isInTemp) {
-            // Updated pattern to match _sbsaveX.jpg
             const saveMatch = fileName.match(/image(\d+)_sbsave(\d+)\.jpg$/)
             if (saveMatch) {
-              // The image number is in saveMatch[1]
-              // The sbsave version is in saveMatch[2]
-              number = parseInt(saveMatch[1])  // This matches the main image number
-              version = parseInt(saveMatch[2]) // This is the sbsave version number
+              number = parseInt(saveMatch[1])
+              version = parseInt(saveMatch[2])
             } else {
-              // For main images, just get the number
               const mainMatch = fileName.match(/image(\d+)\.jpg$/)
               if (mainMatch) number = parseInt(mainMatch[1])
             }
@@ -130,6 +137,11 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
         else if (/\.mp3$/.test(fileName)) {
           type = 'audio'
           const match = fileName.match(/(\d+)\.mp3$/)
+          if (match) number = parseInt(match[1])
+        }
+        else if (/\.mp4$/.test(fileName)) {
+          type = 'video'
+          const match = fileName.match(/(\d+)\.mp4$/)
           if (match) number = parseInt(match[1])
         }
         else if (/\.txt$/.test(fileName)) {
@@ -150,7 +162,7 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
         }
         else return null
 
-        console.log('Processing file:', { fileName, type, number, version, isInTemp })
+        console.log('Processing file:', { fileName, type, number, version, isInTemp, isInOutput })
 
         return {
           url: await getSignedUrl(r2Client, new GetObjectCommand({
@@ -173,7 +185,8 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
       version: f.version,
       path: f.path, 
       hasContent: !!f.content,
-      isInTemp: f.path.includes('/temp/')
+      isInTemp: f.path.includes('/temp/'),
+      isInOutput: f.path.includes('/output/')
     })))
 
     return filtered
