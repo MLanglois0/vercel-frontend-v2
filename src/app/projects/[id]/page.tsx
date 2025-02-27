@@ -1031,11 +1031,14 @@ export default function ProjectDetail() {
               </div>
               {videos.length > 0 ? (
                 <div className="relative">
-                  <div className="flex gap-4 overflow-x-auto pb-4 scroll-smooth">
+                  <div
+                    ref={scrollContainerRef}
+                    className="flex gap-4 overflow-x-auto pb-4 scroll-smooth"
+                  >
                     {videos.map((video, index) => (
-                      <Card key={index} className="flex-shrink-0 w-[341px]">
+                      <Card key={index} className="flex-shrink-0 w-[270px]">
                         <CardContent className="p-2 space-y-2">
-                          <div className="relative w-full h-[192px]">
+                          <div className="relative w-full h-[480px]">
                             <video controls className="w-full h-full object-cover rounded">
                               <source src={video.url} type="video/mp4" />
                               Your browser does not support the video tag.
@@ -1045,6 +1048,33 @@ export default function ProjectDetail() {
                       </Card>
                     ))}
                   </div>
+                  {videos.length > 1 && (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="absolute left-0 top-1/2 transform -translate-y-1/2 bg-background"
+                        onClick={() => scrollContainerRef.current?.scrollBy({ left: -270, behavior: 'smooth' })}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="absolute right-0 top-1/2 transform -translate-y-1/2 bg-background"
+                        onClick={() => scrollContainerRef.current?.scrollBy({ left: 270, behavior: 'smooth' })}
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                      <Slider
+                        value={[sliderValue]}
+                        onValueChange={handleScrollSliderChange}
+                        max={100}
+                        step={1}
+                        className="w-full"
+                      />
+                    </>
+                  )}
                 </div>
               ) : (
                 <Card className="p-8 text-center">
