@@ -8,14 +8,39 @@ import Image from 'next/image';
 export default function Home() {
   const router = useRouter();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [hasProjects, setHasProjects] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setIsLoggedIn(!!session);
+      if (session) {
+        // Fetch projects to check if user has any
+        supabase
+          .from('projects')
+          .select('id')
+          .eq('user_id', session.user.id)
+          .limit(1)
+          .then(({ data }) => {
+            setHasProjects(!!(data && data.length > 0));
+          });
+      }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setIsLoggedIn(!!session);
+      if (session) {
+        // Fetch projects to check if user has any
+        supabase
+          .from('projects')
+          .select('id')
+          .eq('user_id', session.user.id)
+          .limit(1)
+          .then(({ data }) => {
+            setHasProjects(!!(data && data.length > 0));
+          });
+      } else {
+        setHasProjects(false);
+      }
     });
 
     return () => subscription.unsubscribe();
@@ -40,7 +65,7 @@ export default function Home() {
           onClick={() => router.push('/projects')}
           className="mt-6 px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
         >
-          Get Started
+          {hasProjects ? 'Go to My Projects' : 'Get Started'}
         </button>
       )}
     </main>
