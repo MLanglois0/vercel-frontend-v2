@@ -8,7 +8,7 @@ interface CommandResponse {
 
 export async function sendCommand(command: string): Promise<CommandResponse> {
   try {
-    console.log('Starting command:', command)
+    // console.log('Starting command:', command)
     
     const response = await fetch('http://3.95.153.86:5000/run-command', {
       method: 'POST',
@@ -25,7 +25,7 @@ export async function sendCommand(command: string): Promise<CommandResponse> {
     }
 
     const data = await response.json()
-    console.log('Command started:', data)
+    // console.log('Command started:', data)
     return data as CommandResponse
   } catch (error: unknown) {
     console.error('Error sending command:', error)

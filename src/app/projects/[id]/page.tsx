@@ -183,16 +183,16 @@ export default function ProjectDetail() {
       const signedFiles = await getSignedImageUrls(session.user.id, project.id)
       
       // Log all files first
-      console.log('\n=== All Files ===')
-      console.log('Total files:', signedFiles.length)
-      signedFiles.forEach(file => console.log('File:', file.path))
+      // console.log('\n=== All Files ===')
+      // console.log('Total files:', signedFiles.length)
+      // signedFiles.forEach(file => console.log('File:', file.path))
 
       // Filter signed files based on file type and path
       const storyboardFiles = signedFiles.filter(file => {
         const isMatch = file.type === 'image' &&
           file.path.includes('/temp/') &&
           file.path.match(/.*?chapter\d+_\d+_image\d+(?:_sbsave\d+)?\.jpg$/)
-        if (isMatch) console.log('Matched storyboard file:', file.path)
+        // if (isMatch) console.log('Matched storyboard file:', file.path)
         return isMatch
       })
 
@@ -200,7 +200,7 @@ export default function ProjectDetail() {
         const isMatch = file.type === 'audio' &&
           file.path.includes('/temp/') &&
           file.path.match(/.*?chapter\d+_\d+_audio\d+(?:_sbsave)?\.mp3$/)
-        if (isMatch) console.log('Matched audio file:', file.path)
+        // if (isMatch) console.log('Matched audio file:', file.path)
         return isMatch
       })
 
@@ -208,14 +208,14 @@ export default function ProjectDetail() {
         const isMatch = file.type === 'text' &&
           file.path.includes('/temp/') &&
           file.path.match(/.*?chapter\d+_\d+_chunk\d+\.txt$/)
-        if (isMatch) console.log('Matched text file:', file.path)
+        // if (isMatch) console.log('Matched text file:', file.path)
         return isMatch
       })
 
       // Log filtered files
-      console.log('\n=== Filtered Files ===')
-      console.log('Storyboard files:', storyboardFiles.length)
-      storyboardFiles.forEach(file => console.log('Image:', file.path))
+      // console.log('\n=== Filtered Files ===')
+      // console.log('Storyboard files:', storyboardFiles.length)
+      // storyboardFiles.forEach(file => console.log('Image:', file.path))
 
       const videoFiles = signedFiles.filter(file => 
         file.path.startsWith(`${session.user.id}/${project.id}/output/`) && file.type === 'video'
@@ -230,23 +230,23 @@ export default function ProjectDetail() {
       }
 
       // First, let's log all storyboard files for debugging
-      console.log('\n=== All Storyboard Files ===')
-      storyboardFiles.forEach(file => {
-        console.log('File:', file.path)
-      })
+      // console.log('\n=== All Storyboard Files ===')
+      // storyboardFiles.forEach(file => {
+      //   console.log('File:', file.path)
+      // })
 
       // Group storyboard items
       const groupedItems = storyboardFiles.reduce<Record<number, StoryboardItem>>((acc, file) => {
         // Extract the base name and sequence number from the full path
         const match = file.path.match(/chapter\d+_\d+_image(\d+)(?:_sbsave\d+)?\.jpg$/)
         if (!match) {
-          console.log('Skipping file - no sequence number:', file.path)
+          // console.log('Skipping file - no sequence number:', file.path)
           return acc
         }
 
         const number = parseInt(match[1])
         if (isNaN(number)) {
-          console.log('Skipping file - invalid sequence number:', file.path)
+          // console.log('Skipping file - invalid sequence number:', file.path)
           return acc
         }
 
@@ -269,7 +269,7 @@ export default function ProjectDetail() {
         if (!file.path.includes('_sbsave')) {
           imageData.url = file.url
           imageData.path = file.path
-          console.log('Added main image:', number, file.path)
+          // console.log('Added main image:', number, file.path)
         } else {
           // Ensure savedVersions array exists
           if (!imageData.savedVersions) {
@@ -279,8 +279,8 @@ export default function ProjectDetail() {
           // Extract sbsave number
           const sbsaveMatch = file.path.match(/_sbsave(\d+)\.jpg$/)
           if (sbsaveMatch) {
-            const sbsaveNumber = parseInt(sbsaveMatch[1])
-            console.log('Processing sbsave:', number, 'sbsave number:', sbsaveNumber, 'path:', file.path)
+            // const sbsaveNumber = parseInt(sbsaveMatch[1])
+            // console.log('Processing sbsave:', number, 'sbsave number:', sbsaveNumber, 'path:', file.path)
             
             // Add to savedVersions array
             imageData.savedVersions.push({
@@ -297,7 +297,7 @@ export default function ProjectDetail() {
               return aNum - bNum
             })
             
-            console.log('Added sbsave image:', number, file.path, 'sbsave number:', sbsaveNumber)
+            // console.log('Added sbsave image:', number, file.path, 'sbsave number:', sbsaveNumber)
           }
         }
 
@@ -305,35 +305,35 @@ export default function ProjectDetail() {
       }, {})
 
       // Detailed logging after processing
-      console.log('\n=== After Image Processing ===')
-      Object.entries(groupedItems).forEach(([number, item]) => {
-        console.log(`\nItem ${number}:`)
-        console.log('Main Image:', item.image?.path)
-        console.log('Saved Versions:')
-        item.image?.savedVersions?.forEach((version, idx) => {
-          console.log(`  ${idx + 1}:`, version.path)
-        })
-        console.log('Total saved versions:', item.image?.savedVersions?.length)
-      })
+      // console.log('\n=== After Image Processing ===')
+      // Object.entries(groupedItems).forEach(([number, item]) => {
+      //   console.log(`\nItem ${number}:`)
+      //   console.log('Main Image:', item.image?.path)
+      //   console.log('Saved Versions:')
+      //   item.image?.savedVersions?.forEach((version, idx) => {
+      //     console.log(`  ${idx + 1}:`, version.path)
+      //   })
+      //   console.log('Total saved versions:', item.image?.savedVersions?.length)
+      // })
 
       // Add audio data
       audioFiles.forEach(file => {
         // Extract the sequence number from the file path
         const match = file.path.match(/audio(\d+)(?:_sbsave)?\.mp3$/)
         if (!match) {
-          console.log('Skipping audio file - no sequence number:', file.path)
+          // console.log('Skipping audio file - no sequence number:', file.path)
           return
         }
 
         const number = parseInt(match[1])
         if (isNaN(number)) {
-          console.log('Skipping audio file - invalid sequence number:', file.path)
+          // console.log('Skipping audio file - invalid sequence number:', file.path)
           return
         }
         
         const item = groupedItems[number]
         if (!item) {
-          console.log('No matching item found for audio:', number, file.path)
+          // console.log('No matching item found for audio:', number, file.path)
           return
         }
 
@@ -348,21 +348,21 @@ export default function ProjectDetail() {
             url: file.url,
             path: file.path
           }
-          console.log('Added sbsave audio:', number, file.path)
+          // console.log('Added sbsave audio:', number, file.path)
         } else {
           item.audio.url = file.url
           item.audio.path = file.path
-          console.log('Added main audio:', number, file.path)
+          // console.log('Added main audio:', number, file.path)
         }
       })
 
-      console.log('=== After Audio Processing ===')
-      Object.entries(groupedItems).forEach(([number, item]) => {
-        console.log(`Item ${number} audio:`, {
-          mainAudio: item.audio?.path,
-          savedVersion: item.audio?.savedVersion?.path
-        })
-      })
+      // console.log('=== After Audio Processing ===')
+      // Object.entries(groupedItems).forEach(([number, item]) => {
+      //   console.log(`Item ${number} audio:`, {
+      //     mainAudio: item.audio?.path,
+      //     savedVersion: item.audio?.savedVersion?.path
+      //   })
+      // })
 
       // Add text data
       textFiles.forEach(file => {
@@ -370,13 +370,13 @@ export default function ProjectDetail() {
           // Extract the sequence number from the filename
           const match = file.path.match(/chunk(\d+)\.txt$/)
           if (!match) {
-            console.log('Skipping text file - no sequence number:', file.path)
+            // console.log('Skipping text file - no sequence number:', file.path)
             return
           }
           
           const number = parseInt(match[1])
           if (isNaN(number)) {
-            console.log('Skipping text file - invalid sequence number:', file.path)
+            // console.log('Skipping text file - invalid sequence number:', file.path)
             return
           }
           
@@ -385,17 +385,17 @@ export default function ProjectDetail() {
               content: file.content,
               path: file.path
             }
-            console.log('Added text:', number, file.path)
+            // console.log('Added text:', number, file.path)
           } else {
-            console.log('No matching item found for text:', number, file.path)
+            // console.log('No matching item found for text:', number, file.path)
           }
         }
       })
 
-      console.log('=== After Text Processing ===')
-      Object.entries(groupedItems).forEach(([number, item]) => {
-        console.log(`Item ${number} text:`, item.text?.path)
-      })
+      // console.log('=== After Text Processing ===')
+      // Object.entries(groupedItems).forEach(([number, item]) => {
+      //   console.log(`Item ${number} text:`, item.text?.path)
+      // })
 
       // Clean and validate grouped items - only include items that have all required components
       const validItems = Object.values(groupedItems)
@@ -405,16 +405,16 @@ export default function ProjectDetail() {
         )
         .sort((a, b) => a.number - b.number)
 
-      console.log('=== Final Valid Items ===')
-      validItems.forEach(item => {
-        console.log(`Item ${item.number}:`, {
-          image: item.image?.path,
-          savedVersions: item.image?.savedVersions?.map(v => v.path),
-          audio: item.audio?.path,
-          audioSaved: item.audio?.savedVersion?.path,
-          text: item.text?.path
-        })
-      })
+      // console.log('=== Final Valid Items ===')
+      // validItems.forEach(item => {
+      //   console.log(`Item ${item.number}:`, {
+      //     image: item.image?.path,
+      //     savedVersions: item.image?.savedVersions?.map(v => v.path),
+      //     audio: item.audio?.path,
+      //     audioSaved: item.audio?.savedVersion?.path,
+      //     text: item.text?.path
+      //   })
+      // })
 
       setHasSecondTrack(validItems.some(item => item.audio?.savedVersion))
       setItems(validItems)
@@ -447,7 +447,7 @@ export default function ProjectDetail() {
         
         if (status) {
           setProjectStatus(status)
-          console.log('Updated project status:', status)
+          // console.log('Updated project status:', status)
         }
       } catch (error) {
         console.error('Error polling status:', error)
@@ -915,7 +915,7 @@ export default function ProjectDetail() {
                                 <Button 
                                   variant="outline" 
                                   onClick={() => {
-                                    console.log("Sending request to the backend")
+                                    // console.log("Sending request to the backend")
                                   }}
                                   className="whitespace-nowrap text-sm"
                                 >

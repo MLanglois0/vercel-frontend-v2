@@ -34,20 +34,20 @@ interface ProjectStatus {
 
 export async function listProjectFiles(userId: string, projectId: string) {
   try {
-    console.log(`Listing files for user ${userId} and project ${projectId}`)
+    // console.log(`Listing files for user ${userId} and project ${projectId}`)
     const listCommand = new ListObjectsV2Command({
       Bucket: process.env.R2_BUCKET_NAME,
       Prefix: `${userId}/${projectId}/`
     })
 
     const { Contents: files } = await r2Client.send(listCommand)
-    console.log('Raw files from R2:', files?.map(f => f.Key))
+    // console.log('Raw files from R2:', files?.map(f => f.Key))
     if (!files) return []
 
     const signedFiles = await Promise.all(
       files.map(async (file): Promise<{ path: string } | null> => {
         if (!file.Key) return null
-        console.log('Processing file for deletion:', file.Key)
+        // console.log('Processing file for deletion:', file.Key)
         return {
           path: file.Key
         }
@@ -55,7 +55,7 @@ export async function listProjectFiles(userId: string, projectId: string) {
     )
 
     const filtered = signedFiles.filter((file): file is NonNullable<typeof file> => file !== null)
-    console.log('Final list of files to process:', filtered.map(f => f.path))
+    // console.log('Final list of files to process:', filtered.map(f => f.path))
     return filtered
   } catch (error) {
     console.error('Error listing project files:', error)
@@ -100,9 +100,9 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
 
     if (!allFiles.length) return []
 
-    console.log('Base directory files:', baseResponse.Contents?.map(f => f.Key))
-    console.log('Temp directory files:', tempResponse.Contents?.map(f => f.Key))
-    console.log('Output directory files:', outputResponse.Contents?.map(f => f.Key))
+    // console.log('Base directory files:', baseResponse.Contents?.map(f => f.Key))
+    // console.log('Temp directory files:', tempResponse.Contents?.map(f => f.Key))
+    // console.log('Output directory files:', outputResponse.Contents?.map(f => f.Key))
 
     const signedUrls = await Promise.all(
       allFiles.map(async (file): Promise<SignedFileResponse | null> => {
@@ -112,7 +112,6 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
         
         // Handle files based on their location
         const isInTemp = file.Key.includes('/temp/')
-        const isInOutput = file.Key.includes('/output/')
 
         // For storyboard files (in temp), extract number from filename
         let number = 0
@@ -158,14 +157,14 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
           })
           const response = await r2Client.send(getCommand)
           content = await response.Body?.transformToString()
-          console.log('Text file found:', { fileName, number, content })
+          // console.log('Text file found:', { fileName, number, content })
         }
         else if (/\.epub$/.test(fileName)) {
           type = 'epub'
         }
         else return null
 
-        console.log('Processing file:', { fileName, type, number, isInTemp, isInOutput })
+        // console.log('Processing file:', { fileName, type, number, isInTemp })
 
         return {
           url: await getSignedUrl(r2Client, new GetObjectCommand({
@@ -181,13 +180,12 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
     )
 
     const filtered = signedUrls.filter((url): url is SignedFileResponse => url !== null)
-    console.log('Filtered signed URLs:', filtered.map(f => ({ 
-      type: f.type, 
-      number: f.number,
-      path: f.path, 
-      isInTemp: f.path.includes('/temp/'),
-      isInOutput: f.path.includes('/output/')
-    })))
+    // console.log('Filtered signed URLs:', filtered.map(f => ({ 
+    //   type: f.type, 
+    //   number: f.number,
+    //   path: f.path, 
+    //   isInTemp: f.path.includes('/temp/')
+    // })))
 
     return filtered
   } catch (error) {
@@ -257,21 +255,20 @@ export async function deleteProjectFile(path: string): Promise<void> {
     throw new Error('Invalid file path format. Path must start with userId/projectId/')
   }
 
-  console.log('Attempting to delete file:', path)
+  // console.log('Attempting to delete file:', path)
   const command = new DeleteObjectCommand({
     Bucket: process.env.R2_BUCKET_NAME,
     Key: path,
   })
 
-  console.log('Delete command:', {
-    bucket: process.env.R2_BUCKET_NAME,
-    key: path
-  })
+  // console.log('Delete command:', {
+  //   bucket: process.env.R2_BUCKET_NAME,
+  //   key: path
+  // })
 
   try {
-    const response = await r2Client.send(command)
-    console.log('Delete response:', response)
-    console.log('Successfully deleted file:', path)
+    await r2Client.send(command)
+    // console.log('Successfully deleted file:', path)
   } catch (error) {
     console.error('Error deleting file:', path, error)
     throw error
@@ -405,7 +402,7 @@ export async function updateProjectStatus({
     })
 
     await r2Client.send(putCommand)
-    console.log('Status file updated:', statusFilePath)
+    // console.log('Status file updated:', statusFilePath)
   } catch (error) {
     console.error('Error updating status file:', error)
     throw error
@@ -451,7 +448,7 @@ export async function getProjectStatus({
 
 export async function deleteProjectFolder(userId: string, projectId: string): Promise<void> {
   const prefix = `${userId}/${projectId}/`
-  console.log('Deleting project folder recursively:', prefix)
+  // console.log('Deleting project folder recursively:', prefix)
   let totalDeleted = 0
 
   try {
@@ -470,7 +467,7 @@ export async function deleteProjectFolder(userId: string, projectId: string): Pr
       
       if (!Contents || Contents.length === 0) {
         if (totalDeleted === 0) {
-          console.log('No files found in folder:', prefix)
+          // console.log('No files found in folder:', prefix)
         }
         break
       }
@@ -486,14 +483,14 @@ export async function deleteProjectFolder(userId: string, projectId: string): Pr
 
       await r2Client.send(deleteCommand)
       totalDeleted += Contents.length
-      console.log(`Deleted batch of ${Contents.length} files. Total deleted: ${totalDeleted}`)
+      // console.log(`Deleted batch of ${Contents.length} files. Total deleted: ${totalDeleted}`)
 
       // Set up next batch if there are more files
       continuationToken = IsTruncated ? NextContinuationToken : undefined
 
     } while (continuationToken)
 
-    console.log(`Successfully deleted ${totalDeleted} total files from folder:`, prefix)
+    // console.log(`Successfully deleted ${totalDeleted} total files from folder:`, prefix)
   } catch (error) {
     console.error('Error deleting project folder:', prefix, error)
     throw error
