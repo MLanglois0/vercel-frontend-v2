@@ -839,12 +839,12 @@ export default function ProjectDetail() {
           </TabsTrigger>
         </TabsList>
 
-        <div className="mt-4 bg-white rounded-lg p-6 shadow-sm">
+        <div className="mt-0.5 bg-white rounded-lg p-6 shadow-sm">
           <TabsContent value="intake">
             <Card className="p-6 border-0 shadow-none">
               {projectStatus && (
-                <div className="mb-4">
-                  <span className="bg-green-50 text-green-700 px-3 py-1.5 rounded-md inline-block">
+                <div className="mb-3">
+                  <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md inline-block text-sm">
                     Status: {projectStatus.Ebook_Prep_Status}
                   </span>
                 </div>
@@ -865,8 +865,8 @@ export default function ProjectDetail() {
           <TabsContent value="storyboard">
             <Card className="p-6 border-0 shadow-none">
               {projectStatus && (
-                <div className="mb-4">
-                  <span className="bg-green-50 text-green-700 px-3 py-1.5 rounded-md inline-block">
+                <div className="mb-3">
+                  <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md inline-block text-sm">
                     Status: {projectStatus.Storyboard_Status}
                   </span>
                 </div>
@@ -1081,8 +1081,8 @@ export default function ProjectDetail() {
           <TabsContent value="audiobook">
             <Card className="p-6 border-0 shadow-none">
               {projectStatus && (
-                <div className="mb-4">
-                  <span className="bg-green-50 text-green-700 px-3 py-1.5 rounded-md inline-block">
+                <div className="mb-3">
+                  <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md inline-block text-sm">
                     Status: {projectStatus.Audiobook_Status}
                   </span>
                 </div>
