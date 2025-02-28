@@ -74,6 +74,24 @@ interface ProjectStatus {
 }
 
 // Helper functions for button states
+function getInitialTab(status: ProjectStatus | null) {
+  if (!status) return 'intake'
+
+  const isIntakeComplete = status.Ebook_Prep_Status === "Ebook Processing Complete"
+  const isStoryboardComplete = status.Storyboard_Status === "Storyboard Complete"
+  const isAudiobookComplete = status.Audiobook_Status === "Audiobook Complete"
+
+  if (isIntakeComplete && isStoryboardComplete && isAudiobookComplete) {
+    return 'audiobook'
+  }
+
+  if (!isIntakeComplete) return 'intake'
+  if (!isStoryboardComplete) return 'storyboard'
+  if (!isAudiobookComplete) return 'audiobook'
+
+  return 'intake'
+}
+
 function getIntakeButtonState(status: string | undefined) {
   switch (status) {
     case "Ready to process ebook":
@@ -793,23 +811,29 @@ export default function ProjectDetail() {
         </div>
       </div>
 
-      <Tabs defaultValue="intake" className="w-full">
+      <Tabs defaultValue={getInitialTab(projectStatus)} className="w-full">
         <TabsList className="flex w-full bg-gray-100 p-1 rounded-lg">
           <TabsTrigger
             value="intake"
-            className="flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm"
+            className={`flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm ${
+              projectStatus?.Ebook_Prep_Status === "Ebook Processing Complete" ? 'bg-green-50' : ''
+            }`}
           >
             Intake
           </TabsTrigger>
           <TabsTrigger
             value="storyboard"
-            className="flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-orange-600 data-[state=active]:shadow-sm"
+            className={`flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-orange-600 data-[state=active]:shadow-sm ${
+              projectStatus?.Storyboard_Status === "Storyboard Complete" ? 'bg-green-50' : ''
+            }`}
           >
             Storyboard
           </TabsTrigger>
           <TabsTrigger
             value="audiobook"
-            className="flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-green-600 data-[state=active]:shadow-sm"
+            className={`flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-green-600 data-[state=active]:shadow-sm ${
+              projectStatus?.Audiobook_Status === "Audiobook Complete" ? 'bg-green-50' : ''
+            }`}
           >
             Audiobook
           </TabsTrigger>
