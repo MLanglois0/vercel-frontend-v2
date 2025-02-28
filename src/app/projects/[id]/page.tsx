@@ -17,7 +17,8 @@ import {
   uploadProjectFile, 
   updateProjectStatus, 
   getProjectStatus, 
-  deleteProjectFolder
+  deleteProjectFolder,
+  renameImageToOldSet
 } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
@@ -46,6 +47,10 @@ interface StoryboardItem {
       url: string
       path: string
     }[]
+    oldsetVersion?: {
+      url: string
+      path: string
+    }
   }
   audio?: {
     url: string
@@ -170,6 +175,7 @@ export default function ProjectDetail() {
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
   const [projectStatus, setProjectStatus] = useState<ProjectStatus | null>(null)
   const [videos, setVideos] = useState<VideoFile[]>([])
+  const [processingNewImageSet, setProcessingNewImageSet] = useState<Set<number>>(new Set())
 
   const fetchProject = useCallback(async () => {
     try {
@@ -209,8 +215,14 @@ export default function ProjectDetail() {
       const storyboardFiles = signedFiles.filter(file => {
         const isMatch = file.type === 'image' &&
           file.path.includes('/temp/') &&
-          file.path.match(/.*?chapter\d+_\d+_image\d+(?:_sbsave\d+)?\.jpg$/)
-        // if (isMatch) console.log('Matched storyboard file:', file.path)
+          (file.path.match(/.*?chapter\d+_\d+_image\d+(?:_sbsave\d+)?\.jpg$/) ||
+           file.path.match(/.*?chapter\d+_\d+_image\d+\.jpgoldset$/))
+        if (isMatch) {
+          console.log('DEBUG: Matched storyboard file:', file.path)
+          if (file.path.endsWith('.jpgoldset')) {
+            console.log('DEBUG: Found jpgoldset file during filtering:', file.path)
+          }
+        }
         return isMatch
       })
 
@@ -218,7 +230,6 @@ export default function ProjectDetail() {
         const isMatch = file.type === 'audio' &&
           file.path.includes('/temp/') &&
           file.path.match(/.*?chapter\d+_\d+_audio\d+(?:_sbsave)?\.mp3$/)
-        // if (isMatch) console.log('Matched audio file:', file.path)
         return isMatch
       })
 
@@ -226,14 +237,14 @@ export default function ProjectDetail() {
         const isMatch = file.type === 'text' &&
           file.path.includes('/temp/') &&
           file.path.match(/.*?chapter\d+_\d+_chunk\d+\.txt$/)
-        // if (isMatch) console.log('Matched text file:', file.path)
         return isMatch
       })
 
       // Log filtered files
-      // console.log('\n=== Filtered Files ===')
-      // console.log('Storyboard files:', storyboardFiles.length)
-      // storyboardFiles.forEach(file => console.log('Image:', file.path))
+      console.log('\n=== Filtered Files ===')
+      console.log('Storyboard files:', storyboardFiles.length)
+      console.log('Audio files:', audioFiles.length)
+      console.log('Text files:', textFiles.length)
 
       const videoFiles = signedFiles.filter(file => 
         file.path.startsWith(`${session.user.id}/${project.id}/output/`) && file.type === 'video'
@@ -248,23 +259,29 @@ export default function ProjectDetail() {
       }
 
       // First, let's log all storyboard files for debugging
-      // console.log('\n=== All Storyboard Files ===')
-      // storyboardFiles.forEach(file => {
-      //   console.log('File:', file.path)
-      // })
+      console.log('\n=== DEBUG: Initial File Load ===')
+      console.log('DEBUG: Total files:', signedFiles.length)
+      console.log('\n=== DEBUG: Storyboard Files ===')
+      storyboardFiles.forEach(file => {
+        console.log('DEBUG: File:', file.path)
+        if (file.path.endsWith('.jpgoldset')) {
+          console.log('🎯 DEBUG: Found jpgoldset file during initial load:', file.path)
+        }
+      })
 
       // Group storyboard items
       const groupedItems = storyboardFiles.reduce<Record<number, StoryboardItem>>((acc, file) => {
         // Extract the base name and sequence number from the full path
-        const match = file.path.match(/chapter\d+_\d+_image(\d+)(?:_sbsave\d+)?\.jpg$/)
+        const match = file.path.match(/chapter\d+_\d+_image(\d+)(?:_sbsave\d+)?\.jpg$/) ||
+                     file.path.match(/chapter\d+_\d+_image(\d+)\.jpgoldset$/)
         if (!match) {
-          // console.log('Skipping file - no sequence number:', file.path)
+          console.log('DEBUG: Skipping file - no sequence number:', file.path)
           return acc
         }
 
         const number = parseInt(match[1])
         if (isNaN(number)) {
-          // console.log('Skipping file - invalid sequence number:', file.path)
+          console.log('DEBUG: Skipping file - invalid sequence number:', file.path)
           return acc
         }
 
@@ -275,7 +292,40 @@ export default function ProjectDetail() {
             image: { 
               url: '', 
               path: '', 
-              savedVersions: [] 
+              savedVersions: []
+            }
+          }
+
+          // Find and add corresponding text file
+          const textFile = textFiles.find(tf => 
+            tf.path.match(new RegExp(`chapter\\d+_\\d+_chunk${number}\\.txt$`))
+          )
+          if (textFile?.content) {
+            acc[number].text = {
+              content: textFile.content,
+              path: textFile.path
+            }
+          }
+
+          // Find and add corresponding audio file
+          const audioFile = audioFiles.find(af => 
+            af.path.match(new RegExp(`chapter\\d+_\\d+_audio${number}(?:_sbsave)?\\.mp3$`))
+          )
+          if (audioFile) {
+            acc[number].audio = {
+              url: audioFile.url,
+              path: audioFile.path
+            }
+
+            // Check for saved audio version
+            const savedAudioFile = audioFiles.find(af => 
+              af.path.match(new RegExp(`chapter\\d+_\\d+_audio${number}_sbsave\\.mp3$`))
+            )
+            if (savedAudioFile) {
+              acc[number].audio.savedVersion = {
+                url: savedAudioFile.url,
+                path: savedAudioFile.path
+              }
             }
           }
         }
@@ -283,137 +333,54 @@ export default function ProjectDetail() {
         const imageData = acc[number]?.image
         if (!imageData) return acc
 
-        // Check if this is a main image or sbsave version
-        if (!file.path.includes('_sbsave')) {
-          imageData.url = file.url
-          imageData.path = file.path
-          // console.log('Added main image:', number, file.path)
-        } else {
-          // Ensure savedVersions array exists
+        // Check if this is a jpgoldset file
+        if (file.path.endsWith('.jpgoldset')) {
+          console.log('DEBUG: Adding jpgoldset file to item:', {
+            number,
+            path: file.path
+          })
+          imageData.oldsetVersion = {
+            url: file.url,
+            path: file.path
+          }
+        } 
+        // Check if this is a saved version
+        else if (file.path.includes('_sbsave')) {
           if (!imageData.savedVersions) {
             imageData.savedVersions = []
           }
           
-          // Extract sbsave number
-          const sbsaveMatch = file.path.match(/_sbsave(\d+)\.jpg$/)
-          if (sbsaveMatch) {
-            // const sbsaveNumber = parseInt(sbsaveMatch[1])
-            // console.log('Processing sbsave:', number, 'sbsave number:', sbsaveNumber, 'path:', file.path)
-            
-            // Add to savedVersions array
-            imageData.savedVersions.push({
-              url: file.url,
-              path: file.path
-            })
-            
-            // Sort savedVersions by sbsave number
-            imageData.savedVersions.sort((a, b) => {
-              const aMatch = a.path.match(/_sbsave(\d+)\.jpg$/)
-              const bMatch = b.path.match(/_sbsave(\d+)\.jpg$/)
-              const aNum = aMatch ? parseInt(aMatch[1]) : 0
-              const bNum = bMatch ? parseInt(bMatch[1]) : 0
-              return aNum - bNum
-            })
-            
-            // console.log('Added sbsave image:', number, file.path, 'sbsave number:', sbsaveNumber)
-          }
+          imageData.savedVersions.push({
+            url: file.url,
+            path: file.path
+          })
+          
+          // Sort savedVersions by sbsave number
+          imageData.savedVersions.sort((a, b) => {
+            const aMatch = a.path.match(/_sbsave(\d+)\.jpg$/)
+            const bMatch = b.path.match(/_sbsave(\d+)\.jpg$/)
+            const aNum = aMatch ? parseInt(aMatch[1]) : 0
+            const bNum = bMatch ? parseInt(bMatch[1]) : 0
+            return aNum - bNum
+          })
+        }
+        // This is a main image
+        else {
+          imageData.url = file.url
+          imageData.path = file.path
         }
 
         return acc
       }, {})
 
-      // Detailed logging after processing
-      // console.log('\n=== After Image Processing ===')
-      // Object.entries(groupedItems).forEach(([number, item]) => {
-      //   console.log(`\nItem ${number}:`)
-      //   console.log('Main Image:', item.image?.path)
-      //   console.log('Saved Versions:')
-      //   item.image?.savedVersions?.forEach((version, idx) => {
-      //     console.log(`  ${idx + 1}:`, version.path)
-      //   })
-      //   console.log('Total saved versions:', item.image?.savedVersions?.length)
-      // })
-
-      // Add audio data
-      audioFiles.forEach(file => {
-        // Extract the sequence number from the file path
-        const match = file.path.match(/audio(\d+)(?:_sbsave)?\.mp3$/)
-        if (!match) {
-          // console.log('Skipping audio file - no sequence number:', file.path)
-          return
-        }
-
-        const number = parseInt(match[1])
-        if (isNaN(number)) {
-          // console.log('Skipping audio file - invalid sequence number:', file.path)
-          return
-        }
-        
-        const item = groupedItems[number]
-        if (!item) {
-          // console.log('No matching item found for audio:', number, file.path)
-          return
-        }
-
-        // Initialize audio if it doesn't exist
-        if (!item.audio) {
-          item.audio = { url: '', path: '' }
-        }
-
-        // Handle the file based on whether it's a main or sbsave file
-        if (file.path.includes('_sbsave')) {
-          item.audio.savedVersion = {
-            url: file.url,
-            path: file.path
-          }
-          // console.log('Added sbsave audio:', number, file.path)
-        } else {
-          item.audio.url = file.url
-          item.audio.path = file.path
-          // console.log('Added main audio:', number, file.path)
-        }
+      // Log the grouped items for debugging
+      console.log('\n=== DEBUG: Grouped Items ===')
+      Object.entries(groupedItems).forEach(([number, item]) => {
+        console.log(`\nItem ${number}:`)
+        console.log('Main Image:', item.image?.path)
+        console.log('Oldset Version:', item.image?.oldsetVersion?.path)
+        console.log('Saved Versions:', item.image?.savedVersions?.map(v => v.path))
       })
-
-      // console.log('=== After Audio Processing ===')
-      // Object.entries(groupedItems).forEach(([number, item]) => {
-      //   console.log(`Item ${number} audio:`, {
-      //     mainAudio: item.audio?.path,
-      //     savedVersion: item.audio?.savedVersion?.path
-      //   })
-      // })
-
-      // Add text data
-      textFiles.forEach(file => {
-        if (file.content) {
-          // Extract the sequence number from the filename
-          const match = file.path.match(/chunk(\d+)\.txt$/)
-          if (!match) {
-            // console.log('Skipping text file - no sequence number:', file.path)
-            return
-          }
-          
-          const number = parseInt(match[1])
-          if (isNaN(number)) {
-            // console.log('Skipping text file - invalid sequence number:', file.path)
-            return
-          }
-          
-          if (groupedItems[number]) {
-            groupedItems[number].text = {
-              content: file.content,
-              path: file.path
-            }
-            // console.log('Added text:', number, file.path)
-          } else {
-            // console.log('No matching item found for text:', number, file.path)
-          }
-        }
-      })
-
-      // console.log('=== After Text Processing ===')
-      // Object.entries(groupedItems).forEach(([number, item]) => {
-      //   console.log(`Item ${number} text:`, item.text?.path)
-      // })
 
       // Clean and validate grouped items - only include items that have all required components
       const validItems = Object.values(groupedItems)
@@ -423,16 +390,13 @@ export default function ProjectDetail() {
         )
         .sort((a, b) => a.number - b.number)
 
-      // console.log('=== Final Valid Items ===')
-      // validItems.forEach(item => {
-      //   console.log(`Item ${item.number}:`, {
-      //     image: item.image?.path,
-      //     savedVersions: item.image?.savedVersions?.map(v => v.path),
-      //     audio: item.audio?.path,
-      //     audioSaved: item.audio?.savedVersion?.path,
-      //     text: item.text?.path
-      //   })
-      // })
+      console.log('\n=== DEBUG: Valid Items ===')
+      validItems.forEach(item => {
+        console.log(`\nItem ${item.number}:`)
+        console.log('Main Image:', item.image?.path)
+        console.log('Oldset Version:', item.image?.oldsetVersion?.path)
+        console.log('Saved Versions:', item.image?.savedVersions?.map(v => v.path))
+      })
 
       setHasSecondTrack(validItems.some(item => item.audio?.savedVersion))
       setItems(validItems)
@@ -452,8 +416,12 @@ export default function ProjectDetail() {
   useEffect(() => {
     if (!project) return
 
+    let isPolling = true // Add flag to prevent race conditions
+
     // Start polling every 5 seconds
     const interval = setInterval(async () => {
+      if (!isPolling) return
+
       try {
         const { data: { session } } = await supabase.auth.getSession()
         if (!session) return
@@ -463,9 +431,18 @@ export default function ProjectDetail() {
           projectId: project.id
         })
         
-        if (status) {
+        if (status && isPolling) {
+          const wasProcessing = projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait"
+          const isComplete = status.Storyboard_Status === "Storyboard Complete"
+          
           setProjectStatus(status)
-          // console.log('Updated project status:', status)
+          
+          // Only refresh if we were processing and now we're complete
+          if (wasProcessing && isComplete) {
+            console.log('🔄 Status changed from processing to complete, checking for jpgoldset files...')
+            setProcessingNewImageSet(new Set())
+            await fetchProject()
+          }
         }
       } catch (error) {
         console.error('Error polling status:', error)
@@ -473,8 +450,11 @@ export default function ProjectDetail() {
     }, 5000)
 
     // Cleanup on unmount or when project changes
-    return () => clearInterval(interval)
-  }, [project])
+    return () => {
+      isPolling = false
+      clearInterval(interval)
+    }
+  }, [project, projectStatus?.Storyboard_Status, fetchProject])
 
   const handleScrollSliderChange = (value: number[]) => {
     setSliderValue(value[0])
@@ -759,6 +739,102 @@ export default function ProjectDetail() {
     }
   }
 
+  const handleNewImageSet = async (item: StoryboardItem) => {
+    if (!item.image?.path || processingNewImageSet.has(item.number)) return
+    
+    try {
+      setProcessingNewImageSet(prev => new Set(prev).add(item.number))
+
+      // Extract the image number from the path to verify we're processing the correct image
+      const imageMatch = item.image.path.match(/image(\d+)\.jpg$/)
+      if (!imageMatch || parseInt(imageMatch[1]) !== item.number) {
+        throw new Error('Image number mismatch')
+      }
+
+      // Rename current image to .jpgoldset
+      await renameImageToOldSet({
+        imagePath: item.image.path
+      })
+
+      // Trigger storyboard generation
+      await handleGenerateStoryboard()
+    } catch (error) {
+      console.error('Error handling new image set:', error)
+      toast.error(getUserFriendlyError(error))
+      setProcessingNewImageSet(prev => {
+        const next = new Set(prev)
+        next.delete(item.number)
+        return next
+      })
+    }
+  }
+
+  const checkForJpgoldset = (itemNumber: number): boolean => {
+    console.log(`\n🔍 DEBUG: Checking for jpgoldset files for item ${itemNumber}:`);
+    
+    // Get the current item's image path
+    const currentItem = items.find(i => i.number === itemNumber);
+    if (!currentItem?.image?.path) {
+      console.log('❌ DEBUG: No image path found for item:', itemNumber);
+      return false;
+    }
+
+    // First check if the item has an oldsetVersion directly
+    if (currentItem.image.oldsetVersion?.path) {
+      console.log('✅ DEBUG: Found oldsetVersion directly:', currentItem.image.oldsetVersion.path);
+      return true;
+    }
+
+    // Get the current image path and extract the base name (everything before .jpg)
+    const currentPath = currentItem.image.path;
+    const baseFilename = currentPath.replace(/\.jpg$/, '');
+    
+    console.log('DEBUG: Looking for jpgoldset match:');
+    console.log('- Current path:', currentPath);
+    console.log('- Base filename:', baseFilename);
+
+    // Look for any file that has the same base name but with .jpgoldset extension
+    const hasOldSet = items.some(item => {
+      if (!item.image?.path) return false;
+      
+      const checkPath = item.image.path;
+      console.log('\nChecking against file:', checkPath);
+      
+      // First verify it's a jpgoldset file
+      if (!checkPath.endsWith('.jpgoldset')) {
+        console.log('- Skipping: Not a jpgoldset file');
+        return false;
+      }
+
+      // Get base filename of the jpgoldset file
+      const checkBaseFilename = checkPath.replace(/\.jpgoldset$/, '');
+      
+      console.log('- Base filename comparison:');
+      console.log('  Original:', baseFilename);
+      console.log('  Checking:', checkBaseFilename);
+      console.log('  Equal?:', checkBaseFilename === baseFilename);
+
+      return checkBaseFilename === baseFilename;
+    });
+
+    console.log('\nFinal result:', hasOldSet ? '✅ Found match' : '❌ No match found');
+    return hasOldSet;
+  };
+
+  const getButtonText = (item: StoryboardItem): string => {
+    console.log('\n=== DEBUG: getButtonText called ===')
+    console.log('DEBUG: For item number:', item.number)
+    
+    if (processingNewImageSet.has(item.number)) {
+      console.log('DEBUG: Item is processing:', item.number)
+      return 'Processing'
+    }
+    
+    const hasJpgoldset = checkForJpgoldset(item.number)
+    console.log('DEBUG: Final button text:', hasJpgoldset ? 'Revert Image Set' : 'New Image Set')
+    return hasJpgoldset ? 'Revert Image Set' : 'New Image Set'
+  }
+
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
 
@@ -938,12 +1014,11 @@ export default function ProjectDetail() {
                                 )}
                                 <Button 
                                   variant="outline" 
-                                  onClick={() => {
-                                    // console.log("Sending request to the backend")
-                                  }}
+                                  onClick={() => handleNewImageSet(item)}
+                                  disabled={processingNewImageSet.has(item.number)}
                                   className="whitespace-nowrap text-sm"
                                 >
-                                  New Image Set
+                                  {getButtonText(item)}
                                 </Button>
                               </div>
                               <div className="flex gap-2 flex-1 justify-end">

@@ -118,19 +118,39 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
         let type: FileType
         let content: string | undefined
 
-        if (/\.(jpg|jpeg|png|webp)$/i.test(fileName)) {
+        if (/\.(jpg|jpeg|png|webp)$/i.test(fileName) || fileName.endsWith('jpgoldset')) {
           type = 'image'
           if (isInTemp) {
-            const saveMatch = fileName.match(/image(\d+)_sbsave(?:_\d+)?\.jpg$/)
-            if (saveMatch) {
-              number = parseInt(saveMatch[1])
-            } else {
+            console.log('Processing temp image file:', fileName)
+            
+            // First check for oldset files
+            if (fileName.endsWith('jpgoldset')) {
+              const oldsetMatch = fileName.match(/image(\d+)\.jpgoldset$/)
+              if (oldsetMatch) {
+                number = parseInt(oldsetMatch[1])
+                console.log('🎯 Found jpgoldset file:', {
+                  fileName,
+                  number,
+                  path: file.Key
+                })
+              }
+            }
+            // Then check for saved versions
+            else if (fileName.match(/image(\d+)_sbsave(?:_\d+)?\.jpg$/)) {
+              const saveMatch = fileName.match(/image(\d+)_sbsave(?:_\d+)?\.jpg$/)
+              if (saveMatch) {
+                number = parseInt(saveMatch[1])
+              }
+            }
+            // Finally check for regular images
+            else {
               const mainMatch = fileName.match(/image(\d+)(?:_\d+)?\.jpg$/)
-              if (mainMatch) number = parseInt(mainMatch[1])
+              if (mainMatch) {
+                number = parseInt(mainMatch[1])
+              }
             }
           }
-        }
-        else if (/\.mp3$/.test(fileName)) {
+        } else if (/\.mp3$/.test(fileName)) {
           type = 'audio'
           const mainMatch = fileName.match(/image(\d+)(?:_\d+)?\.mp3$/)
           const sbsaveMatch = fileName.match(/image(\d+)_sbsave(?:_\d+)?\.mp3$/)
@@ -140,13 +160,11 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
           } else if (sbsaveMatch?.[1]) {
             number = parseInt(sbsaveMatch[1])
           }
-        }
-        else if (/\.mp4$/.test(fileName)) {
+        } else if (/\.mp4$/.test(fileName)) {
           type = 'video'
           const match = fileName.match(/(\d+)\.mp4$/)
           if (match) number = parseInt(match[1])
-        }
-        else if (/\.txt$/.test(fileName)) {
+        } else if (/\.txt$/.test(fileName)) {
           type = 'text'
           const match = fileName.match(/chunk(\d+)\.txt$/)
           if (match) number = parseInt(match[1])
@@ -157,12 +175,9 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
           })
           const response = await r2Client.send(getCommand)
           content = await response.Body?.transformToString()
-          // console.log('Text file found:', { fileName, number, content })
-        }
-        else if (/\.epub$/.test(fileName)) {
+        } else if (/\.epub$/.test(fileName)) {
           type = 'epub'
-        }
-        else return null
+        } else return null
 
         // console.log('Processing file:', { fileName, type, number, isInTemp })
 
@@ -187,7 +202,16 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
     //   isInTemp: f.path.includes('/temp/')
     // })))
 
-    return filtered
+    // Filter signed files based on file type and path
+    filtered.forEach(file => {
+      const isMatch = file.type === 'image' &&
+        file.path.includes('/temp/') &&
+        (file.path.match(/.*?chapter\d+_\d+_image\d+(?:_sbsave\d+)?\.jpg$/) || 
+         file.path.match(/.*?chapter\d+_\d+_image\d+\.jpgoldset$/))
+      if (isMatch) console.log('Matched storyboard file:', file.path)
+    })
+
+    return filtered  // Return all files instead of just storyboard files
   } catch (error) {
     console.error('Error generating signed URLs:', error)
     throw error
@@ -494,6 +518,41 @@ export async function deleteProjectFolder(userId: string, projectId: string): Pr
   } catch (error) {
     console.error('Error deleting project folder:', prefix, error)
     throw error
+  }
+}
+
+export async function renameImageToOldSet({
+  imagePath
+}: {
+  imagePath: string
+}): Promise<{ success: boolean }> {
+  if (!imagePath) throw new Error('Image path is required')
+
+  // Verify this is a valid image path with the correct format
+  const imageMatch = imagePath.match(/image(\d+)\.jpg$/)
+  if (!imageMatch) {
+    throw new Error('Invalid image path format')
+  }
+
+  // Create the oldset path
+  const oldsetPath = `${imagePath}oldset`
+
+  try {
+    // Rename by copying then deleting original
+    await r2Client.send(new CopyObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      CopySource: `${process.env.R2_BUCKET_NAME}/${imagePath}`,
+      Key: oldsetPath,
+    }))
+    await r2Client.send(new DeleteObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: imagePath,
+    }))
+
+    return { success: true }
+  } catch (error) {
+    console.error('Error renaming image to oldset:', error)
+    throw new Error(getUserFriendlyError(error))
   }
 }
 
