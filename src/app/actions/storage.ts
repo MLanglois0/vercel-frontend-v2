@@ -11,7 +11,6 @@ interface SignedFileResponse {
   path: string
   type: FileType
   content?: string
-  version?: number
 }
 
 type FileType = 'image' | 'audio' | 'text' | 'epub' | 'video'
@@ -119,25 +118,29 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
         let number = 0
         let type: FileType
         let content: string | undefined
-        let version: number | undefined
 
         if (/\.(jpg|jpeg|png|webp)$/i.test(fileName)) {
           type = 'image'
           if (isInTemp) {
-            const saveMatch = fileName.match(/image(\d+)_sbsave(\d+)\.jpg$/)
+            const saveMatch = fileName.match(/image(\d+)_sbsave(?:_\d+)?\.jpg$/)
             if (saveMatch) {
               number = parseInt(saveMatch[1])
-              version = parseInt(saveMatch[2])
             } else {
-              const mainMatch = fileName.match(/image(\d+)\.jpg$/)
+              const mainMatch = fileName.match(/image(\d+)(?:_\d+)?\.jpg$/)
               if (mainMatch) number = parseInt(mainMatch[1])
             }
           }
         }
         else if (/\.mp3$/.test(fileName)) {
           type = 'audio'
-          const match = fileName.match(/(\d+)\.mp3$/)
-          if (match) number = parseInt(match[1])
+          const mainMatch = fileName.match(/image(\d+)(?:_\d+)?\.mp3$/)
+          const sbsaveMatch = fileName.match(/image(\d+)_sbsave(?:_\d+)?\.mp3$/)
+          
+          if (mainMatch?.[1]) {
+            number = parseInt(mainMatch[1])
+          } else if (sbsaveMatch?.[1]) {
+            number = parseInt(sbsaveMatch[1])
+          }
         }
         else if (/\.mp4$/.test(fileName)) {
           type = 'video'
@@ -162,7 +165,7 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
         }
         else return null
 
-        console.log('Processing file:', { fileName, type, number, version, isInTemp, isInOutput })
+        console.log('Processing file:', { fileName, type, number, isInTemp, isInOutput })
 
         return {
           url: await getSignedUrl(r2Client, new GetObjectCommand({
@@ -173,7 +176,6 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
           path: file.Key,
           type,
           content,
-          version
         }
       })
     )
@@ -182,9 +184,7 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
     console.log('Filtered signed URLs:', filtered.map(f => ({ 
       type: f.type, 
       number: f.number,
-      version: f.version,
       path: f.path, 
-      hasContent: !!f.content,
       isInTemp: f.path.includes('/temp/'),
       isInOutput: f.path.includes('/output/')
     })))

@@ -17,8 +17,7 @@ import {
   uploadProjectFile, 
   updateProjectStatus, 
   getProjectStatus, 
-  deleteProjectFolder,
-  listProjectFiles
+  deleteProjectFolder
 } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
@@ -46,7 +45,6 @@ interface StoryboardItem {
     savedVersions?: {
       url: string
       path: string
-      version: number
     }[]
   }
   audio?: {
@@ -169,9 +167,6 @@ export default function ProjectDetail() {
       if (error) throw error
       if (!project) throw new Error('Project not found')
 
-      console.log('Project data:', project) // Log project data
-      console.log('Cover file path:', project.cover_file_path) // Log cover path
-
       setProject(project)
 
       // Get initial project status
@@ -182,185 +177,204 @@ export default function ProjectDetail() {
       
       if (status) {
         setProjectStatus(status)
-        console.log('Initial project status:', status)
       }
 
-      // Step 1: Inventory files
-      const filePaths = await listProjectFiles(session.user.id, project.id)
-
-      // Determine which files to display
-      const relevantFilePaths = filePaths.map(file => file.path).filter(path => 
-        path.includes('/temp/') || path.includes('/output/')
-      )
-
-      // Step 2: Generate signed URLs for relevant files
+      // Step 1: Get signed URLs for all files
       const signedFiles = await getSignedImageUrls(session.user.id, project.id)
-      console.log('All signed files before filtering:', signedFiles) // Debug all files
       
-      // Filter signed files based on relevant paths
+      // Filter signed files based on file type and path
       const storyboardFiles = signedFiles.filter(file => 
-        relevantFilePaths.includes(file.path) && file.type === 'image'
+        file.type === 'image' &&
+        file.path.includes('/temp/') &&
+        file.path.match(/.*?chapter\d+_\d+_image\d+\.jpg$/)
       )
 
       const audioFiles = signedFiles.filter(file => 
-        relevantFilePaths.includes(file.path) && file.type === 'audio'
+        file.type === 'audio' &&
+        file.path.includes('/temp/') &&
+        file.path.match(/.*?chapter\d+_\d+_audio\d+\.mp3$/)
       )
 
-      // New: Filter video files from the output directory
+      const textFiles = signedFiles.filter(file => 
+        file.type === 'text' &&
+        file.path.includes('/temp/') &&
+        file.path.match(/.*?chapter\d+_\d+_chunk\d+\.txt$/)
+      )
+
+      console.log('=== Filtered Files ===')
+      console.log('Images:', storyboardFiles.map(f => f.path))
+      console.log('Audio:', audioFiles.map(f => f.path))
+      console.log('Text:', textFiles.map(f => f.path))
+
       const videoFiles = signedFiles.filter(file => 
         file.path.startsWith(`${session.user.id}/${project.id}/output/`) && file.type === 'video'
       )
 
-      // Set state for display
-      setItems(storyboardFiles)
       setVideos(videoFiles.map(file => ({ url: file.url, path: file.path })))
 
-      // Log the arrays for debugging
-      console.log('Storyboard files:', storyboardFiles)
-      console.log('Audio files:', audioFiles)
-      console.log('Video files:', videoFiles)
-
-      // Get signed URLs from R2 through server action
-      const signedFilesBeforeFiltering = await getSignedImageUrls(session.user.id, project.id)
-      console.log('All signed files before filtering:', signedFilesBeforeFiltering) // Debug all files
-      
-      // Find cover file first
-      const coverFile = signedFilesBeforeFiltering.find(file => 
-        file.path === project.cover_file_path
-      )
-      
-      console.log('Found cover file:', coverFile) // Log found cover file
-      
-      // Set cover URL if found
+      // Handle cover file
+      const coverFile = signedFiles.find(file => file.path === project.cover_file_path)
       if (coverFile) {
-        console.log('Setting cover URL:', coverFile.url) // Log the URL being set
         setCoverUrl(coverFile.url)
       }
 
-      // Filter out the cover image and get only temp files for storyboard items
-      const storyboardFilesAfterFiltering = signedFilesBeforeFiltering.filter(file => 
-        file.path.includes('/temp/') && // Only include files from temp directory
-        file.path !== project.cover_file_path && 
-        !file.path.endsWith('cover.jpg')
-      )
-      console.log('Storyboard files after filtering:', storyboardFilesAfterFiltering) // Debug filtered files
-      
-      // Continue with existing grouping logic for storyboard items
-      const groupedItems = storyboardFilesAfterFiltering.reduce((acc, file) => {
-        const number = file.number
-        console.log('Processing file:', { path: file.path, type: file.type, number })
-
-        if (!acc[number]) {
-          acc[number] = { number }
-        }
-        
-        if (file.type === 'image') {
-          console.log('Processing IMAGE:', { path: file.path, number: file.number, version: file.version })
-          if (file.version !== undefined) {
-            // This is a saved version
-            if (!acc[number].image) {
-              acc[number].image = { url: '', path: '', savedVersions: [] }
-            }
-            if (!acc[number].image.savedVersions) {
-              acc[number].image.savedVersions = []
-            }
-            console.log('Adding saved version:', file)
-            acc[number].image.savedVersions.push({
-              url: file.url,
-              path: file.path,
-              version: file.version
-            })
-          } else {
-            // This is the main image
-            acc[number].image = {
-              ...acc[number].image,
-              url: file.url,
-              path: file.path,
-            }
-            console.log('Adding main image:', file)
-          }
-        }
-        if (file.type === 'audio') {
-          console.log('Processing AUDIO:', { path: file.path, number: file.number })
-          const match = file.path.match(/(\d+)(?:_sbsave)?\.mp3$/)
-          if (match) {
-            const audioNumber = parseInt(match[1])
-            if (file.path.includes('_sbsave')) {
-              if (!acc[audioNumber].audio) acc[audioNumber].audio = { url: '', path: '' }
-              acc[audioNumber].audio.savedVersion = { url: file.url, path: file.path }
-            } else {
-              acc[audioNumber].audio = { 
-                ...acc[audioNumber].audio,
-                url: file.url, 
-                path: file.path 
-              }
-            }
-          }
-        }
-        if (file.type === 'text' && file.content) {
-          console.log('Processing TEXT:', { path: file.path, number: file.number })
-          // Match number before .txt
-          const match = file.path.match(/(\d+)\.txt$/)
-          console.log('Text file match:', { path: file.path, match }) // Debug text file matching
-          if (match) {
-            const textNumber = parseInt(match[1])
-            acc[textNumber].text = { content: file.content, path: file.path }
-            console.log(`Added text to group ${textNumber}:`, {
-              path: file.path,
-              content: file.content?.substring(0, 50) + '...' // Show first 50 chars
-            })
-          } else {
-            console.log('No match found for text file:', file.path) // Debug unmatched text files
-          }
-        }
-        
-        return acc
-      }, {} as Record<number, StoryboardItem>)
-
-      console.log('Final grouped items:', groupedItems) // Debug final structure
-
-      // Validate the grouped items
-      const cleanedGroupedItems = Object.entries(groupedItems).reduce<Record<number, StoryboardItem>>((acc, [key, value]) => {
-        const number = parseInt(key)
-        
-        if (number === 0) {
-          acc[number] = value
+      // Group storyboard items
+      const groupedItems = storyboardFiles.reduce<Record<number, StoryboardItem>>((acc, file) => {
+        // Extract the sequence number from the file path
+        const match = file.path.match(/(?:image|audio|chunk)(\d+)(?:_sbsave)?\.(?:jpg|mp3|txt)$/)
+        if (!match) {
+          console.log('Skipping file - no sequence number:', file.path)
           return acc
         }
 
-        // Validate that all required files are present
-        if (!value.text) {
-          throw new Error(`Missing text file for storyboard item ${number}`)
-        }
-        if (!value.image) {
-          throw new Error(`Missing image file for storyboard item ${number}`)
-        }
-        if (!value.audio) {
-          throw new Error(`Missing audio file for storyboard item ${number}`)
+        const number = parseInt(match[1])
+        if (isNaN(number)) {
+          console.log('Skipping file - invalid sequence number:', file.path)
+          return acc
         }
 
-        // Only update hasSecondTrack based on file presence
-        if (value.audio.savedVersion) {
-          setHasSecondTrack(true)
+        // Initialize the item if it doesn't exist
+        if (!acc[number]) {
+          acc[number] = {
+            number,
+            image: { url: '', path: '', savedVersions: [] }
+          }
         }
 
-        acc[number] = value
+        const imageData = acc[number]?.image
+        if (!imageData) return acc
+
+        // If this is a main image (not an sbsave), set it as the main image
+        if (!file.path.includes('_sbsave')) {
+          imageData.url = file.url
+          imageData.path = file.path
+          console.log('Added main image:', number, file.path)
+        } 
+        // If this is an sbsave, add it to savedVersions
+        else {
+          if (!imageData.savedVersions) {
+            imageData.savedVersions = []
+          }
+          imageData.savedVersions.push({
+            url: file.url,
+            path: file.path
+          })
+          console.log('Added sbsave image:', number, file.path)
+        }
+
         return acc
       }, {})
 
-      // Log the final grouping
-      console.log('Final cleaned grouping:', cleanedGroupedItems)
+      console.log('=== After Image Processing ===')
+      Object.entries(groupedItems).forEach(([number, item]) => {
+        console.log(`Item ${number}:`, {
+          mainImage: item.image?.path,
+          savedVersions: item.image?.savedVersions?.map(v => v.path)
+        })
+      })
 
-      // Convert to array and sort
-      const items = Object.entries(cleanedGroupedItems)
-        .map(([num, item]) => ({
-          ...item,
-          number: parseInt(num)
-        }))
+      // Add audio data
+      audioFiles.forEach(file => {
+        // Extract the sequence number from the file path
+        const match = file.path.match(/audio(\d+)(?:_sbsave)?\.mp3$/)
+        if (!match) {
+          console.log('Skipping audio file - no sequence number:', file.path)
+          return
+        }
+
+        const number = parseInt(match[1])
+        if (isNaN(number)) {
+          console.log('Skipping audio file - invalid sequence number:', file.path)
+          return
+        }
+        
+        const item = groupedItems[number]
+        if (!item) {
+          console.log('No matching item found for audio:', number, file.path)
+          return
+        }
+
+        // Initialize audio if it doesn't exist
+        if (!item.audio) {
+          item.audio = { url: '', path: '' }
+        }
+
+        // Handle the file based on whether it's a main or sbsave file
+        if (file.path.includes('_sbsave')) {
+          item.audio.savedVersion = {
+            url: file.url,
+            path: file.path
+          }
+          console.log('Added sbsave audio:', number, file.path)
+        } else {
+          item.audio.url = file.url
+          item.audio.path = file.path
+          console.log('Added main audio:', number, file.path)
+        }
+      })
+
+      console.log('=== After Audio Processing ===')
+      Object.entries(groupedItems).forEach(([number, item]) => {
+        console.log(`Item ${number} audio:`, {
+          mainAudio: item.audio?.path,
+          savedVersion: item.audio?.savedVersion?.path
+        })
+      })
+
+      // Add text data
+      textFiles.forEach(file => {
+        if (file.content) {
+          // Extract the sequence number from the filename
+          const match = file.path.match(/chunk(\d+)\.txt$/)
+          if (!match) {
+            console.log('Skipping text file - no sequence number:', file.path)
+            return
+          }
+          
+          const number = parseInt(match[1])
+          if (isNaN(number)) {
+            console.log('Skipping text file - invalid sequence number:', file.path)
+            return
+          }
+          
+          if (groupedItems[number]) {
+            groupedItems[number].text = {
+              content: file.content,
+              path: file.path
+            }
+            console.log('Added text:', number, file.path)
+          } else {
+            console.log('No matching item found for text:', number, file.path)
+          }
+        }
+      })
+
+      console.log('=== After Text Processing ===')
+      Object.entries(groupedItems).forEach(([number, item]) => {
+        console.log(`Item ${number} text:`, item.text?.path)
+      })
+
+      // Clean and validate grouped items - only include items that have all required components
+      const validItems = Object.values(groupedItems)
+        .filter(item => 
+          item.image?.url && 
+          item.image?.path
+        )
         .sort((a, b) => a.number - b.number)
 
-      console.log('Final sorted items:', items) // Debug log
-      setItems(items)
+      console.log('=== Final Valid Items ===')
+      validItems.forEach(item => {
+        console.log(`Item ${item.number}:`, {
+          image: item.image?.path,
+          savedVersions: item.image?.savedVersions?.map(v => v.path),
+          audio: item.audio?.path,
+          audioSaved: item.audio?.savedVersion?.path,
+          text: item.text?.path
+        })
+      })
+
+      setHasSecondTrack(validItems.some(item => item.audio?.savedVersion))
+      setItems(validItems)
     } catch (error) {
       console.error('Error fetching project:', error)
       toast.error(getUserFriendlyError(error))
@@ -866,23 +880,18 @@ export default function ProjectDetail() {
                                 </Button>
                               </div>
                               <div className="flex gap-2 flex-1">
-                                {item.image?.savedVersions?.map((version) => (
+                                {item.image?.savedVersions?.map((version, idx) => (
                                   <div 
-                                    key={version.version} 
+                                    key={`${version.path}-${idx}`}
                                     className="relative w-[55px] h-[96px] cursor-pointer hover:opacity-80 transition-opacity"
                                     onClick={async () => {
-                                      // Skip if already swapping this image
                                       if (swappingImages.has(version.path)) return
-
                                       try {
-                                        // Add both paths to the swapping set
                                         setSwappingImages(prev => new Set([...prev, version.path, item.image!.path]))
-                                        
                                         await swapStoryboardImage({
                                           originalPath: item.image!.path,
                                           thumbnailPath: version.path
                                         })
-                                        
                                         await fetchProject()
                                       } catch (error) {
                                         console.error('Error swapping images:', error)
@@ -899,7 +908,7 @@ export default function ProjectDetail() {
                                   >
                                     <Image 
                                       src={version.url}
-                                      alt={`Version ${version.version}`}
+                                      alt={`Version ${idx + 1}`}
                                       fill
                                       className={`object-cover rounded border bg-muted/10 ${
                                         swappingImages.has(version.path) ? 'opacity-50' : ''
@@ -913,7 +922,7 @@ export default function ProjectDetail() {
                                     )}
                                   </div>
                                 ))}
-                                {Array.from({ length: 3 - (item.image?.savedVersions?.length || 0) }).map((_, i) => (
+                                {Array.from({ length: Math.max(0, 3 - (item.image?.savedVersions?.length || 0)) }).map((_, i) => (
                                   <div 
                                     key={i} 
                                     className="border rounded bg-muted/10"
@@ -945,22 +954,15 @@ export default function ProjectDetail() {
                                   </Button>
                                   <Button
                                     variant="outline"
-                                    onClick={item.audio?.savedVersion ? () => handleTrackSelection(2, item) : () => handleNewAudio(item)}
+                                    onClick={() => handleNewAudio(item)}
                                     disabled={generatingAudio.has(item.number) || switchingTrack !== null}
                                     className="flex-none text-xs -mt-3 relative"
                                     style={{ width: '90px', height: '70px' }}
                                   >
-                                    <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
-                                      primaryTrack === 2 ? 'bg-green-500' : 'bg-gray-300'
-                                    }`} />
-                                    {switchingTrack === 2 
-                                      ? 'Waiting...' 
-                                      : generatingAudio.has(item.number)
-                                        ? 'Working...'
-                                        : item.audio?.savedVersion 
-                                          ? 'Track 2' 
-                                          : 'New Audio'
-                                  }
+                                    {generatingAudio.has(item.number)
+                                      ? 'Working...'
+                                      : 'New Audio'
+                                    }
                                   </Button>
                                 </div>
                               ) : (
