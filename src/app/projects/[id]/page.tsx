@@ -182,29 +182,40 @@ export default function ProjectDetail() {
       // Step 1: Get signed URLs for all files
       const signedFiles = await getSignedImageUrls(session.user.id, project.id)
       
+      // Log all files first
+      console.log('\n=== All Files ===')
+      console.log('Total files:', signedFiles.length)
+      signedFiles.forEach(file => console.log('File:', file.path))
+
       // Filter signed files based on file type and path
-      const storyboardFiles = signedFiles.filter(file => 
-        file.type === 'image' &&
-        file.path.includes('/temp/') &&
-        file.path.match(/.*?chapter\d+_\d+_image\d+\.jpg$/)
-      )
+      const storyboardFiles = signedFiles.filter(file => {
+        const isMatch = file.type === 'image' &&
+          file.path.includes('/temp/') &&
+          file.path.match(/.*?chapter\d+_\d+_image\d+(?:_sbsave\d+)?\.jpg$/)
+        if (isMatch) console.log('Matched storyboard file:', file.path)
+        return isMatch
+      })
 
-      const audioFiles = signedFiles.filter(file => 
-        file.type === 'audio' &&
-        file.path.includes('/temp/') &&
-        file.path.match(/.*?chapter\d+_\d+_audio\d+\.mp3$/)
-      )
+      const audioFiles = signedFiles.filter(file => {
+        const isMatch = file.type === 'audio' &&
+          file.path.includes('/temp/') &&
+          file.path.match(/.*?chapter\d+_\d+_audio\d+(?:_sbsave)?\.mp3$/)
+        if (isMatch) console.log('Matched audio file:', file.path)
+        return isMatch
+      })
 
-      const textFiles = signedFiles.filter(file => 
-        file.type === 'text' &&
-        file.path.includes('/temp/') &&
-        file.path.match(/.*?chapter\d+_\d+_chunk\d+\.txt$/)
-      )
+      const textFiles = signedFiles.filter(file => {
+        const isMatch = file.type === 'text' &&
+          file.path.includes('/temp/') &&
+          file.path.match(/.*?chapter\d+_\d+_chunk\d+\.txt$/)
+        if (isMatch) console.log('Matched text file:', file.path)
+        return isMatch
+      })
 
-      console.log('=== Filtered Files ===')
-      console.log('Images:', storyboardFiles.map(f => f.path))
-      console.log('Audio:', audioFiles.map(f => f.path))
-      console.log('Text:', textFiles.map(f => f.path))
+      // Log filtered files
+      console.log('\n=== Filtered Files ===')
+      console.log('Storyboard files:', storyboardFiles.length)
+      storyboardFiles.forEach(file => console.log('Image:', file.path))
 
       const videoFiles = signedFiles.filter(file => 
         file.path.startsWith(`${session.user.id}/${project.id}/output/`) && file.type === 'video'
@@ -218,10 +229,16 @@ export default function ProjectDetail() {
         setCoverUrl(coverFile.url)
       }
 
+      // First, let's log all storyboard files for debugging
+      console.log('\n=== All Storyboard Files ===')
+      storyboardFiles.forEach(file => {
+        console.log('File:', file.path)
+      })
+
       // Group storyboard items
       const groupedItems = storyboardFiles.reduce<Record<number, StoryboardItem>>((acc, file) => {
-        // Extract the sequence number from the file path
-        const match = file.path.match(/(?:image|audio|chunk)(\d+)(?:_sbsave)?\.(?:jpg|mp3|txt)$/)
+        // Extract the base name and sequence number from the full path
+        const match = file.path.match(/chapter\d+_\d+_image(\d+)(?:_sbsave\d+)?\.jpg$/)
         if (!match) {
           console.log('Skipping file - no sequence number:', file.path)
           return acc
@@ -237,40 +254,66 @@ export default function ProjectDetail() {
         if (!acc[number]) {
           acc[number] = {
             number,
-            image: { url: '', path: '', savedVersions: [] }
+            image: { 
+              url: '', 
+              path: '', 
+              savedVersions: [] 
+            }
           }
         }
 
         const imageData = acc[number]?.image
         if (!imageData) return acc
 
-        // If this is a main image (not an sbsave), set it as the main image
+        // Check if this is a main image or sbsave version
         if (!file.path.includes('_sbsave')) {
           imageData.url = file.url
           imageData.path = file.path
           console.log('Added main image:', number, file.path)
-        } 
-        // If this is an sbsave, add it to savedVersions
-        else {
+        } else {
+          // Ensure savedVersions array exists
           if (!imageData.savedVersions) {
             imageData.savedVersions = []
           }
-          imageData.savedVersions.push({
-            url: file.url,
-            path: file.path
-          })
-          console.log('Added sbsave image:', number, file.path)
+          
+          // Extract sbsave number
+          const sbsaveMatch = file.path.match(/_sbsave(\d+)\.jpg$/)
+          if (sbsaveMatch) {
+            const sbsaveNumber = parseInt(sbsaveMatch[1])
+            console.log('Processing sbsave:', number, 'sbsave number:', sbsaveNumber, 'path:', file.path)
+            
+            // Add to savedVersions array
+            imageData.savedVersions.push({
+              url: file.url,
+              path: file.path
+            })
+            
+            // Sort savedVersions by sbsave number
+            imageData.savedVersions.sort((a, b) => {
+              const aMatch = a.path.match(/_sbsave(\d+)\.jpg$/)
+              const bMatch = b.path.match(/_sbsave(\d+)\.jpg$/)
+              const aNum = aMatch ? parseInt(aMatch[1]) : 0
+              const bNum = bMatch ? parseInt(bMatch[1]) : 0
+              return aNum - bNum
+            })
+            
+            console.log('Added sbsave image:', number, file.path, 'sbsave number:', sbsaveNumber)
+          }
         }
 
         return acc
       }, {})
 
-      console.log('=== After Image Processing ===')
+      // Detailed logging after processing
+      console.log('\n=== After Image Processing ===')
       Object.entries(groupedItems).forEach(([number, item]) => {
-        console.log(`Item ${number}:`, {
-          mainImage: item.image?.path,
-          savedVersions: item.image?.savedVersions?.map(v => v.path)
+        console.log(`\nItem ${number}:`)
+        console.log('Main Image:', item.image?.path)
+        console.log('Saved Versions:')
+        item.image?.savedVersions?.forEach((version, idx) => {
+          console.log(`  ${idx + 1}:`, version.path)
         })
+        console.log('Total saved versions:', item.image?.savedVersions?.length)
       })
 
       // Add audio data
@@ -879,7 +922,7 @@ export default function ProjectDetail() {
                                   New Image Set
                                 </Button>
                               </div>
-                              <div className="flex gap-2 flex-1">
+                              <div className="flex gap-2 flex-1 justify-end">
                                 {item.image?.savedVersions?.map((version, idx) => (
                                   <div 
                                     key={`${version.path}-${idx}`}
@@ -910,7 +953,7 @@ export default function ProjectDetail() {
                                       src={version.url}
                                       alt={`Version ${idx + 1}`}
                                       fill
-                                      className={`object-cover rounded border bg-muted/10 ${
+                                      className={`object-cover rounded-sm border border-gray-200 ${
                                         swappingImages.has(version.path) ? 'opacity-50' : ''
                                       }`}
                                       sizes="55px"
@@ -925,8 +968,7 @@ export default function ProjectDetail() {
                                 {Array.from({ length: Math.max(0, 3 - (item.image?.savedVersions?.length || 0)) }).map((_, i) => (
                                   <div 
                                     key={i} 
-                                    className="border rounded bg-muted/10"
-                                    style={{ width: '55px', height: '96px' }}
+                                    className="relative w-[55px] h-[96px] border border-gray-200 rounded-sm bg-gray-50"
                                   />
                                 ))}
                               </div>
