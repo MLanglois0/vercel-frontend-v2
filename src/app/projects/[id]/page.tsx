@@ -831,8 +831,8 @@ export default function ProjectDetail() {
     }
     
     const hasJpgoldset = checkForJpgoldset(item.number)
-    console.log('DEBUG: Final button text:', hasJpgoldset ? 'Revert Image Set' : 'New Image Set')
-    return hasJpgoldset ? 'Revert Image Set' : 'New Image Set'
+    console.log('DEBUG: Final button text:', hasJpgoldset ? 'Restore Image' : 'Replace Images')
+    return hasJpgoldset ? 'Restore Image' : 'Replace Images'
   }
 
   if (loading) return <div>Loading...</div>
