@@ -1240,8 +1240,8 @@ export default function ProjectDetail() {
                             </div>
                           </div>
                           
-                          <div className="flex gap-4 items-center mt-2">
-                            <div className="flex flex-col gap-2">
+                          <div className="flex gap-2 items-center mt-2">
+                            <div className="flex flex-col gap-2 flex-1">
                               {item.text?.content && (
                                 <Button
                                   variant="outline"
@@ -1249,7 +1249,8 @@ export default function ProjectDetail() {
                                     setSelectedText(item.text?.content || null)
                                     setIsTextDialogOpen(true)
                                   }}
-                                  className="flex items-center gap-2 text-sm"
+                                  className="flex items-center gap-2 text-sm w-full justify-center"
+                                  size="sm"
                                 >
                                   <FileText className="h-4 w-4" />
                                   View Text
@@ -1262,16 +1263,17 @@ export default function ProjectDetail() {
                                   processingNewImageSet.has(item.number) || 
                                   (isReplaceImagesInProgress && checkForJpgoldset(item.number) === false)
                                 }
-                                className="whitespace-nowrap text-sm"
+                                className="whitespace-nowrap text-sm w-full justify-center"
+                                size="sm"
                               >
                                 {getButtonText(item)}
                               </Button>
                             </div>
-                            <div className="flex gap-2 flex-1 justify-end">
+                            <div className="flex gap-1 justify-end">
                               {item.image?.savedVersions?.map((version, idx) => (
                                 <div 
                                   key={`${version.path}-${idx}`}
-                                  className="relative w-[55px] h-[96px] cursor-pointer hover:opacity-80 transition-opacity"
+                                  className="relative w-[48px] h-[85px] cursor-pointer hover:opacity-80 transition-opacity"
                                   onClick={async () => {
                                     if (swappingImages.has(version.path)) return
                                     try {
@@ -1301,7 +1303,7 @@ export default function ProjectDetail() {
                                     className={`object-cover rounded-sm border border-gray-200 ${
                                       swappingImages.has(version.path) ? 'opacity-50' : ''
                                     }`}
-                                    sizes="55px"
+                                    sizes="48px"
                                   />
                                   {swappingImages.has(version.path) && (
                                     <div className="absolute inset-0 flex items-center justify-center">
@@ -1313,7 +1315,7 @@ export default function ProjectDetail() {
                               {Array.from({ length: Math.max(0, 3 - (item.image?.savedVersions?.length || 0)) }).map((_, i) => (
                                 <div 
                                   key={i} 
-                                  className="relative w-[55px] h-[96px] border border-gray-200 rounded-sm bg-gray-50"
+                                  className="relative w-[48px] h-[85px] border border-gray-200 rounded-sm bg-gray-50"
                                 />
                               ))}
                             </div>
