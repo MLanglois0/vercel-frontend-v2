@@ -1149,17 +1149,10 @@ export default function ProjectDetail() {
           </TabsTrigger>
         </TabsList>
 
-        <div className="mt-0.5 bg-white rounded-lg p-6 shadow-sm">
+        <div className="mt-0 bg-white rounded-lg p-3 shadow-sm">
           <TabsContent value="intake">
-            <Card className="p-6 border-0 shadow-none">
-              {projectStatus && (
-                <div className="mb-3">
-                  <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md inline-block text-sm">
-                    Status: {projectStatus.Ebook_Prep_Status}
-                  </span>
-                </div>
-              )}
-              <div className="flex justify-between items-center mb-6">
+            <Card className="p-2 border-0 shadow-none">
+              <div className="flex justify-between items-center mb-4">
                 <p className="text-3xl font-bold">Intake Tab Here</p>
                 <Button 
                   variant="outline"
@@ -1173,15 +1166,8 @@ export default function ProjectDetail() {
           </TabsContent>
 
           <TabsContent value="storyboard">
-            <Card className="p-6 border-0 shadow-none">
-              {projectStatus && (
-                <div className="mb-3">
-                  <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md inline-block text-sm">
-                    Status: {projectStatus.Storyboard_Status}
-                  </span>
-                </div>
-              )}
-              <div className="flex justify-between items-center mb-6">
+            <Card className="p-2 border-0 shadow-none">
+              <div className="flex justify-between items-center mb-4">
                 <h3 className="text-2xl font-semibold">Storyboard</h3>
                 <Button 
                   variant="outline"
@@ -1424,15 +1410,8 @@ export default function ProjectDetail() {
           </TabsContent>
 
           <TabsContent value="audiobook">
-            <Card className="p-6 border-0 shadow-none">
-              {projectStatus && (
-                <div className="mb-3">
-                  <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md inline-block text-sm">
-                    Status: {projectStatus.Audiobook_Status}
-                  </span>
-                </div>
-              )}
-              <div className="flex justify-between items-center mb-6">
+            <Card className="p-2 border-0 shadow-none">
+              <div className="flex justify-between items-center mb-4">
                 <h3 className="text-2xl font-semibold">Audiobook</h3>
                 <Button 
                   variant="outline"
