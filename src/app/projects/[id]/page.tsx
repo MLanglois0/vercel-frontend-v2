@@ -90,14 +90,23 @@ function getInitialTab(status: ProjectStatus | null) {
   const isStoryboardComplete = status.Storyboard_Status === "Storyboard Complete"
   const isAudiobookComplete = status.Audiobook_Status === "Audiobook Complete"
 
+  // New behavior: Land on the tab that has a complete status, in this order: Intake, Storyboard, Audiobook
+  // If all are complete, prioritize Audiobook
   if (isIntakeComplete && isStoryboardComplete && isAudiobookComplete) {
     return 'audiobook'
   }
+  
+  // If only ebook and storyboard are complete, land on storyboard
+  if (isIntakeComplete && isStoryboardComplete) {
+    return 'storyboard'
+  }
+  
+  // If only ebook is complete, land on intake
+  if (isIntakeComplete) {
+    return 'intake'
+  }
 
-  if (!isIntakeComplete) return 'intake'
-  if (!isStoryboardComplete) return 'storyboard'
-  if (!isAudiobookComplete) return 'audiobook'
-
+  // If no tab is complete, default to intake
   return 'intake'
 }
 
