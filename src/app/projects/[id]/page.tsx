@@ -179,6 +179,7 @@ export default function ProjectDetail() {
   const [videos, setVideos] = useState<VideoFile[]>([])
   const [processingNewImageSet, setProcessingNewImageSet] = useState<Set<number>>(new Set())
   const [processingItems, setProcessingItems] = useState<Set<number>>(new Set())
+  const [isReplaceImagesInProgress, setIsReplaceImagesInProgress] = useState(false)
 
   const fetchProject = useCallback(async () => {
     try {
@@ -404,6 +405,21 @@ export default function ProjectDetail() {
       clearInterval(interval)
     }
   }, [project, projectStatus?.Storyboard_Status, fetchProject])
+
+  // Add a useEffect to debug the project status
+  useEffect(() => {
+    console.log('Project Status:', {
+      storyboardStatus: projectStatus?.Storyboard_Status,
+      currentStatus: projectStatus?.Current_Status
+    })
+  }, [projectStatus])
+
+  // Add a useEffect to reset the replace images flag when storyboard is complete
+  useEffect(() => {
+    if (projectStatus?.Storyboard_Status === "Storyboard Complete") {
+      setIsReplaceImagesInProgress(false)
+    }
+  }, [projectStatus?.Storyboard_Status])
 
   const handleScrollSliderChange = (value: number[]) => {
     setSliderValue(value[0])
@@ -700,6 +716,11 @@ export default function ProjectDetail() {
 
       setProcessingNewImageSet(prev => new Set(prev).add(item.number))
       setProcessingItems(prev => new Set(prev).add(item.number))
+      
+      // Set the replace images flag if this is not a restore action
+      if (!isRestoreAction) {
+        setIsReplaceImagesInProgress(true)
+      }
 
       // Extract the image number from the path to verify we're processing the correct image
       const imageMatch = item.image.path.match(/image(\d+)\.jpg$/)
@@ -752,6 +773,8 @@ export default function ProjectDetail() {
     } catch (error) {
       console.error('Error handling new image set:', error)
       toast.error(getUserFriendlyError(error))
+      // Reset the replace images flag on error
+      setIsReplaceImagesInProgress(false)
     } finally {
       setProcessingNewImageSet(prev => {
         const next = new Set(prev)
@@ -1021,7 +1044,10 @@ export default function ProjectDetail() {
                               <Button 
                                 variant="outline" 
                                 onClick={() => handleNewImageSet(item)}
-                                disabled={processingNewImageSet.has(item.number)}
+                                disabled={
+                                  processingNewImageSet.has(item.number) || 
+                                  (isReplaceImagesInProgress && checkForJpgoldset(item.number) === false)
+                                }
                                 className="whitespace-nowrap text-sm"
                               >
                                 {getButtonText(item)}
