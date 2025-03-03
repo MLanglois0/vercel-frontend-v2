@@ -179,6 +179,8 @@ export default function ProjectDetail() {
   const [isReplaceImagesInProgress, setIsReplaceImagesInProgress] = useState(false)
   const [confirmReplaceItem, setConfirmReplaceItem] = useState<StoryboardItem | null>(null)
   const [processingNewAudio, setProcessingNewAudio] = useState<Set<number>>(new Set())
+  // Add a state to track audio remount keys
+  const [audioRemountKeys, setAudioRemountKeys] = useState<Record<number, number>>({});
 
   const fetchProject = useCallback(async () => {
     try {
@@ -560,21 +562,11 @@ export default function ProjectDetail() {
             // Fetch the updated project data
             await fetchProject();
             
-            // After fetchProject completes, find the updated item and refresh its audio URL
-            // This ensures the audio player reloads with the new audio file
-            setItems(prevItems => 
-              prevItems.map(prevItem => 
-                prevItem.number === itemNumber && prevItem.audio
-                  ? {
-                      ...prevItem,
-                      audio: {
-                        ...prevItem.audio,
-                        url: `${prevItem.audio.url.split('?')[0]}?t=${Date.now()}`
-                      }
-                    }
-                  : prevItem
-              )
-            );
+            // Force remount of the audio player by updating its key
+            setAudioRemountKeys(prev => ({
+              ...prev,
+              [itemNumber]: Date.now()
+            }));
             
             // Force update hasTrack2 after fetchProject
             setHasTrack2(prev => {
@@ -649,28 +641,11 @@ export default function ProjectDetail() {
       // Update the primary track
       setPrimaryTrack(track);
       
-      // Instead of refreshing the entire project, just update the audio URL
-      // This avoids the server component error
-      if (item.audio) {
-        // Force a refresh of the audio element by creating a new URL with a timestamp
-        // This will trigger the useEffect in the AudioPlayer component
-        const refreshedUrl = `${item.audio.url.split('?')[0]}?t=${Date.now()}`;
-        
-        // Update the items state with the refreshed audio URL
-        setItems(prevItems => 
-          prevItems.map(prevItem => 
-            prevItem.number === item.number && prevItem.audio
-              ? {
-                  ...prevItem,
-                  audio: {
-                    ...prevItem.audio,
-                    url: refreshedUrl
-                  }
-                }
-              : prevItem
-          )
-        );
-      }
+      // Force remount of the audio player by updating its key
+      setAudioRemountKeys(prev => ({
+        ...prev,
+        [item.number]: Date.now()
+      }));
       
     } catch (error) {
       console.error('Error switching audio track:', error);
@@ -1342,6 +1317,7 @@ export default function ProjectDetail() {
                               <div className="flex items-center gap-2">
                                 <AudioPlayer
                                   audioUrl={item.audio.url}
+                                  remountKey={audioRemountKeys[item.number]}
                                 />
                                 
                                 {/* Always show Track 1 button */}
