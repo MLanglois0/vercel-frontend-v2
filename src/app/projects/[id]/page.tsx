@@ -41,6 +41,8 @@ interface Project {
   status: string
   epub_file_path: string
   cover_file_path: string
+  voice_id?: string
+  voice_name?: string
 }
 
 interface Voice {
@@ -216,6 +218,10 @@ export default function ProjectDetail() {
   // Add error state for voice data
   const [voiceDataError, setVoiceDataError] = useState<string | null>(null)
 
+  // Add state for voice selection confirmation dialog
+  const [isVoiceConfirmOpen, setIsVoiceConfirmOpen] = useState(false)
+  const [isUpdatingVoice, setIsUpdatingVoice] = useState(false)
+
   const fetchProject = useCallback(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -255,9 +261,14 @@ export default function ProjectDetail() {
           console.log('Setting voices array:', voiceData.voices.length)
           setVoices(voiceData.voices)
           // Set default selected voice if available
-          if (voiceData.voices.length > 0) {
+          if (project.voice_id && voiceData.voices.some(v => v.voice_id === project.voice_id)) {
+            // If project has a saved voice_id and it exists in the available voices, use it
+            setSelectedVoice(project.voice_id)
+          } else {
+            // Otherwise use the first voice
             setSelectedVoice(voiceData.voices[0].voice_id)
           }
+          setVoiceDataError(null)
         } else {
           console.log('No voice data found or invalid format')
           // Set default voices for testing if no file is found
@@ -527,7 +538,14 @@ export default function ProjectDetail() {
           
           if (voiceData?.voices && Array.isArray(voiceData.voices) && voiceData.voices.length > 0) {
             setVoices(voiceData.voices)
-            setSelectedVoice(voiceData.voices[0].voice_id)
+            // Set default selected voice if available
+            if (project.voice_id && voiceData.voices.some(v => v.voice_id === project.voice_id)) {
+              // If project has a saved voice_id and it exists in the available voices, use it
+              setSelectedVoice(project.voice_id)
+            } else {
+              // Otherwise use the first voice
+              setSelectedVoice(voiceData.voices[0].voice_id)
+            }
             setVoiceDataError(null)
           } else {
             console.error('Voice data file not found or empty after intake')
@@ -1207,6 +1225,46 @@ export default function ProjectDetail() {
     console.log('Voices state:', voices, 'selectedVoice:', selectedVoice)
   }, [voices, selectedVoice])
 
+  // Add function to save selected voice to the project
+  const saveSelectedVoice = async () => {
+    if (!project || !selectedVoice) return
+    
+    setIsUpdatingVoice(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No session')
+      
+      const selectedVoiceData = voices.find(v => v.voice_id === selectedVoice)
+      if (!selectedVoiceData) throw new Error('Selected voice not found')
+      
+      // Update project in database
+      const { error } = await supabase
+        .from('projects')
+        .update({
+          voice_id: selectedVoiceData.voice_id,
+          voice_name: selectedVoiceData.name
+        })
+        .eq('id', project.id)
+      
+      if (error) throw error
+      
+      toast.success(`Voice "${selectedVoiceData.name}" has been selected for this project`)
+      setIsVoiceConfirmOpen(false)
+      
+      // Update local project data
+      setProject({
+        ...project,
+        voice_id: selectedVoiceData.voice_id,
+        voice_name: selectedVoiceData.name
+      })
+    } catch (error) {
+      console.error('Error saving voice selection:', error)
+      toast.error('Failed to save voice selection')
+    } finally {
+      setIsUpdatingVoice(false)
+    }
+  }
+
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
 
@@ -1375,6 +1433,22 @@ export default function ProjectDetail() {
                     Select a voice that will be used to create the storyboard files.
                   </p>
                   
+                  {/* Show currently selected voice if one is saved */}
+                  {project?.voice_name && project?.voice_id && (
+                    <div className="mb-4 p-3 bg-green-50 text-green-800 rounded-md flex items-center justify-between">
+                      <div>
+                        <span className="font-medium">Currently selected voice: </span>
+                        {project.voice_name}
+                      </div>
+                      <button
+                        onClick={() => setIsVoiceConfirmOpen(true)}
+                        className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700"
+                      >
+                        Change
+                      </button>
+                    </div>
+                  )}
+                  
                   {voiceDataError && (
                     <div className="mb-4 p-3 bg-red-100 text-red-800 rounded-md">
                       {voiceDataError}
@@ -1438,6 +1512,16 @@ export default function ProjectDetail() {
                             {voices.find(v => v.voice_id === selectedVoice)?.preview_url ? 'Yes' : 'No'}
                           </span>
                         </div>
+                      </div>
+                      
+                      {/* Add Select This Voice button */}
+                      <div className="mt-4">
+                        <button
+                          onClick={() => setIsVoiceConfirmOpen(true)}
+                          className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                        >
+                          Select This Voice
+                        </button>
                       </div>
                     </div>
                   )}
@@ -1934,6 +2018,33 @@ export default function ProjectDetail() {
                 Proceed
               </Button>
             </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Voice Selection Confirmation Dialog */}
+      <Dialog open={isVoiceConfirmOpen} onOpenChange={setIsVoiceConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm Voice Selection</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <p>
+              <span className="font-medium">{voices.find(v => v.voice_id === selectedVoice)?.name}</span> selected. 
+              Are you sure? This voice will be used to create the narration for your audio book. 
+              It can be changed before you create the storyboard but not afterwards.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsVoiceConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={saveSelectedVoice} 
+              disabled={isUpdatingVoice}
+            >
+              {isUpdatingVoice ? 'Saving...' : 'I\'m Sure'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
