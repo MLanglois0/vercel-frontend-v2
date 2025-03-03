@@ -526,16 +526,8 @@ export async function renameImageToOldSet({
 }: {
   imagePath: string
 }): Promise<{ success: boolean }> {
-  if (!imagePath) throw new Error('Image path is required')
-
-  // Verify this is a valid image path with the correct format
-  const imageMatch = imagePath.match(/image(\d+)\.jpg$/)
-  if (!imageMatch) {
-    throw new Error('Invalid image path format')
-  }
-
-  // Create the oldset path
-  const oldsetPath = `${imagePath}oldset`
+  // Create the oldset path by replacing .jpg with .jpgoldset
+  const oldsetPath = imagePath.replace(/\.jpg$/, '.jpgoldset')
 
   try {
     // Rename by copying then deleting original
@@ -552,6 +544,33 @@ export async function renameImageToOldSet({
     return { success: true }
   } catch (error) {
     console.error('Error renaming image to oldset:', error)
+    throw new Error(getUserFriendlyError(error))
+  }
+}
+
+export async function restoreImageFromOldSet({
+  imagePath
+}: {
+  imagePath: string
+}): Promise<{ success: boolean }> {
+  // Create the oldset path by replacing .jpg with .jpgoldset
+  const oldsetPath = imagePath.replace(/\.jpg$/, '.jpgoldset')
+
+  try {
+    // Restore by copying oldset to original then deleting oldset
+    await r2Client.send(new CopyObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      CopySource: `${process.env.R2_BUCKET_NAME}/${oldsetPath}`,
+      Key: imagePath,
+    }))
+    await r2Client.send(new DeleteObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: oldsetPath,
+    }))
+
+    return { success: true }
+  } catch (error) {
+    console.error('Error restoring image from oldset:', error)
     throw new Error(getUserFriendlyError(error))
   }
 }

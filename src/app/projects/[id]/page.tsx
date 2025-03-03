@@ -18,7 +18,8 @@ import {
   updateProjectStatus, 
   getProjectStatus, 
   deleteProjectFolder,
-  renameImageToOldSet
+  renameImageToOldSet,
+  restoreImageFromOldSet
 } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
@@ -64,6 +65,7 @@ interface StoryboardItem {
     content: string
     path: string
   }
+  isProcessing?: boolean
 }
 
 interface ProjectStatus {
@@ -176,6 +178,7 @@ export default function ProjectDetail() {
   const [projectStatus, setProjectStatus] = useState<ProjectStatus | null>(null)
   const [videos, setVideos] = useState<VideoFile[]>([])
   const [processingNewImageSet, setProcessingNewImageSet] = useState<Set<number>>(new Set())
+  const [processingItems, setProcessingItems] = useState<Set<number>>(new Set())
 
   const fetchProject = useCallback(async () => {
     try {
@@ -269,137 +272,83 @@ export default function ProjectDetail() {
         }
       })
 
-      // Group storyboard items
-      const groupedItems = storyboardFiles.reduce<Record<number, StoryboardItem>>((acc, file) => {
-        // Extract the base name and sequence number from the full path
-        const match = file.path.match(/chapter\d+_\d+_image(\d+)(?:_sbsave\d+)?\.jpg$/) ||
-                     file.path.match(/chapter\d+_\d+_image(\d+)\.jpgoldset$/)
-        if (!match) {
-          console.log('DEBUG: Skipping file - no sequence number:', file.path)
-          return acc
+      // Extract all unique item numbers from files
+      const itemNumbers = new Set<number>()
+      storyboardFiles.forEach(file => {
+        const match = file.path.match(/chapter\d+_\d+_image(\d+)/)
+        if (match) {
+          itemNumbers.add(parseInt(match[1]))
         }
-
-        const number = parseInt(match[1])
-        if (isNaN(number)) {
-          console.log('DEBUG: Skipping file - invalid sequence number:', file.path)
-          return acc
+      })
+      textFiles.forEach(file => {
+        const match = file.path.match(/chapter\d+_\d+_chunk(\d+)/)
+        if (match) {
+          itemNumbers.add(parseInt(match[1]))
         }
-
-        // Initialize the item if it doesn't exist
-        if (!acc[number]) {
-          acc[number] = {
-            number,
-            image: { 
-              url: '', 
-              path: '', 
-              savedVersions: []
-            }
-          }
-
-          // Find and add corresponding text file
-          const textFile = textFiles.find(tf => 
-            tf.path.match(new RegExp(`chapter\\d+_\\d+_chunk${number}\\.txt$`))
-          )
-          if (textFile?.content) {
-            acc[number].text = {
-              content: textFile.content,
-              path: textFile.path
-            }
-          }
-
-          // Find and add corresponding audio file
-          const audioFile = audioFiles.find(af => 
-            af.path.match(new RegExp(`chapter\\d+_\\d+_audio${number}(?:_sbsave)?\\.mp3$`))
-          )
-          if (audioFile) {
-            acc[number].audio = {
-              url: audioFile.url,
-              path: audioFile.path
-            }
-
-            // Check for saved audio version
-            const savedAudioFile = audioFiles.find(af => 
-              af.path.match(new RegExp(`chapter\\d+_\\d+_audio${number}_sbsave\\.mp3$`))
-            )
-            if (savedAudioFile) {
-              acc[number].audio.savedVersion = {
-                url: savedAudioFile.url,
-                path: savedAudioFile.path
-              }
-            }
-          }
+      })
+      audioFiles.forEach(file => {
+        const match = file.path.match(/chapter\d+_\d+_audio(\d+)/)
+        if (match) {
+          itemNumbers.add(parseInt(match[1]))
         }
-
-        const imageData = acc[number]?.image
-        if (!imageData) return acc
-
-        // Check if this is a jpgoldset file
-        if (file.path.endsWith('.jpgoldset')) {
-          console.log('DEBUG: Adding jpgoldset file to item:', {
-            number,
-            path: file.path
-          })
-          imageData.oldsetVersion = {
-            url: file.url,
-            path: file.path
-          }
-        } 
-        // Check if this is a saved version
-        else if (file.path.includes('_sbsave')) {
-          if (!imageData.savedVersions) {
-            imageData.savedVersions = []
-          }
-          
-          imageData.savedVersions.push({
-            url: file.url,
-            path: file.path
-          })
-          
-          // Sort savedVersions by sbsave number
-          imageData.savedVersions.sort((a, b) => {
-            const aMatch = a.path.match(/_sbsave(\d+)\.jpg$/)
-            const bMatch = b.path.match(/_sbsave(\d+)\.jpg$/)
-            const aNum = aMatch ? parseInt(aMatch[1]) : 0
-            const bNum = bMatch ? parseInt(bMatch[1]) : 0
-            return aNum - bNum
-          })
-        }
-        // This is a main image
-        else {
-          imageData.url = file.url
-          imageData.path = file.path
-        }
-
-        return acc
-      }, {})
-
-      // Log the grouped items for debugging
-      console.log('\n=== DEBUG: Grouped Items ===')
-      Object.entries(groupedItems).forEach(([number, item]) => {
-        console.log(`\nItem ${number}:`)
-        console.log('Main Image:', item.image?.path)
-        console.log('Oldset Version:', item.image?.oldsetVersion?.path)
-        console.log('Saved Versions:', item.image?.savedVersions?.map(v => v.path))
       })
 
-      // Clean and validate grouped items - only include items that have all required components
-      const validItems = Object.values(groupedItems)
-        .filter(item => 
-          item.image?.url && 
-          item.image?.path
+      // Create items array with all numbers, even if they don't have images
+      const groupedItems = Array.from(itemNumbers).sort((a, b) => a - b).map(number => {
+        const item: StoryboardItem = { number }
+
+        // Find image files for this number
+        const imageFiles = storyboardFiles.filter(file => 
+          file.path.match(new RegExp(`chapter\\d+_\\d+_image${number}(?:_sbsave\\d+)?\\.jpg$`)) ||
+          file.path.match(new RegExp(`chapter\\d+_\\d+_image${number}\\.jpgoldset$`))
         )
-        .sort((a, b) => a.number - b.number)
 
-      console.log('\n=== DEBUG: Valid Items ===')
-      validItems.forEach(item => {
-        console.log(`\nItem ${item.number}:`)
-        console.log('Main Image:', item.image?.path)
-        console.log('Oldset Version:', item.image?.oldsetVersion?.path)
-        console.log('Saved Versions:', item.image?.savedVersions?.map(v => v.path))
+        if (imageFiles.length > 0) {
+          const mainImage = imageFiles.find(f => !f.path.includes('_sbsave') && !f.path.endsWith('.jpgoldset'))
+          const savedVersions = imageFiles.filter(f => f.path.includes('_sbsave'))
+          const oldsetVersion = imageFiles.find(f => f.path.endsWith('.jpgoldset'))
+
+          if (mainImage) {
+            item.image = {
+              url: mainImage.url,
+              path: mainImage.path,
+              savedVersions: savedVersions.map(v => ({ url: v.url, path: v.path })),
+              oldsetVersion: oldsetVersion ? { url: oldsetVersion.url, path: oldsetVersion.path } : undefined
+            }
+          }
+        }
+
+        // Find text file for this number
+        const textFile = textFiles.find(file => 
+          file.path.match(new RegExp(`chapter\\d+_\\d+_chunk${number}\\.txt$`))
+        )
+        if (textFile?.content) {
+          item.text = {
+            content: textFile.content,
+            path: textFile.path
+          }
+        }
+
+        // Find audio files for this number
+        const audioFile = audioFiles.find(file => 
+          file.path.match(new RegExp(`chapter\\d+_\\d+_audio${number}(?:_sbsave)?\\.mp3$`))
+        )
+        if (audioFile) {
+          const savedAudioFile = audioFiles.find(file => 
+            file.path.match(new RegExp(`chapter\\d+_\\d+_audio${number}_sbsave\\.mp3$`))
+          )
+          item.audio = {
+            url: audioFile.url,
+            path: audioFile.path,
+            savedVersion: savedAudioFile ? { url: savedAudioFile.url, path: savedAudioFile.path } : undefined
+          }
+        }
+
+        return item
       })
 
-      setHasSecondTrack(validItems.some(item => item.audio?.savedVersion))
-      setItems(validItems)
+      setHasSecondTrack(groupedItems.some(item => item.audio?.savedVersion))
+      setItems(groupedItems)
     } catch (error) {
       console.error('Error fetching project:', error)
       toast.error(getUserFriendlyError(error))
@@ -743,7 +692,14 @@ export default function ProjectDetail() {
     if (!item.image?.path || processingNewImageSet.has(item.number)) return
     
     try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No session')
+      if (!project) throw new Error('No project')
+
+      const isRestoreAction = checkForJpgoldset(item.number)
+
       setProcessingNewImageSet(prev => new Set(prev).add(item.number))
+      setProcessingItems(prev => new Set(prev).add(item.number))
 
       // Extract the image number from the path to verify we're processing the correct image
       const imageMatch = item.image.path.match(/image(\d+)\.jpg$/)
@@ -751,17 +707,58 @@ export default function ProjectDetail() {
         throw new Error('Image number mismatch')
       }
 
-      // Rename current image to .jpgoldset
-      await renameImageToOldSet({
-        imagePath: item.image.path
-      })
+      if (isRestoreAction) {
+        // Restore the image from jpgoldset
+        await restoreImageFromOldSet({
+          imagePath: item.image.path
+        })
+        
+        // Refresh the project to show the restored image
+        await fetchProject()
+      } else {
+        // Original "Replace Images" functionality
+        await renameImageToOldSet({
+          imagePath: item.image.path
+        })
 
-      // Trigger storyboard generation
-      await handleGenerateStoryboard()
+        // Trigger storyboard generation
+        await handleGenerateStoryboard()
+
+        // Add a delay before starting to check for completion
+        setTimeout(() => {
+          const checkInterval = setInterval(async () => {
+            const status = await getProjectStatus({
+              userId: session.user.id,
+              projectId: project.id
+            })
+
+            if (status?.Storyboard_Status === "Storyboard Complete") {
+              clearInterval(checkInterval)
+              setProcessingItems(prev => {
+                const next = new Set(prev)
+                next.delete(item.number)
+                return next
+              })
+              await fetchProject()
+            }
+          }, 5000) // Check every 5 seconds
+
+          // Cleanup interval after 10 minutes to prevent infinite checking
+          setTimeout(() => {
+            clearInterval(checkInterval)
+          }, 600000)
+        }, 6000) // Initial 6 second delay
+      }
     } catch (error) {
       console.error('Error handling new image set:', error)
       toast.error(getUserFriendlyError(error))
+    } finally {
       setProcessingNewImageSet(prev => {
+        const next = new Set(prev)
+        next.delete(item.number)
+        return next
+      })
+      setProcessingItems(prev => {
         const next = new Set(prev)
         next.delete(item.number)
         return next
@@ -967,155 +964,163 @@ export default function ProjectDetail() {
                     ref={scrollContainerRef}
                     className="flex gap-4 overflow-x-auto pb-4 scroll-smooth"
                   >
-                    {items.map((item) => {
-                      if (!item.image?.url) return null
-                      return (
-                        <Card key={item.number} className="flex-shrink-0 w-[341px]">
-                          <CardContent className="p-2 space-y-2">
-                            <div className="relative">
-                              {item.image?.url && (
-                                <div className="relative w-full h-[597px]">
+                    {items.map((item) => (
+                      <Card key={item.number} className="flex-shrink-0 w-[341px]">
+                        <CardContent className="p-2 space-y-2">
+                          <div className="relative">
+                            {processingItems.has(item.number) ? (
+                              <div className="relative w-full h-[597px] bg-gray-100 flex items-center justify-center">
+                                <div className="flex flex-col items-center gap-4">
+                                  <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent"></div>
+                                  <p className="text-lg font-medium text-gray-600">Processing...</p>
+                                </div>
+                              </div>
+                            ) : item.image?.url ? (
+                              <div className="relative w-full h-[597px]">
+                                <Image 
+                                  src={item.image.url} 
+                                  alt={`Storyboard ${item.number}`}
+                                  fill
+                                  className={`object-cover rounded ${
+                                    swappingImages.has(item.image.path) ? 'opacity-50' : ''
+                                  }`}
+                                  priority={item.number <= 2}
+                                  sizes="(max-width: 768px) 100vw, 341px"
+                                />
+                                {swappingImages.has(item.image.path) && (
+                                  <div className="absolute inset-0 flex items-center justify-center">
+                                    <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent" />
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="relative w-full h-[597px] bg-gray-100 flex items-center justify-center">
+                                <p className="text-gray-500">No image available</p>
+                              </div>
+                            )}
+                            <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded">
+                              {item.number}
+                            </div>
+                          </div>
+                          
+                          <div className="flex gap-4 items-center mt-2">
+                            <div className="flex flex-col gap-2">
+                              {item.text?.content && (
+                                <Button
+                                  variant="outline"
+                                  onClick={() => {
+                                    setSelectedText(item.text?.content || null)
+                                    setIsTextDialogOpen(true)
+                                  }}
+                                  className="flex items-center gap-2 text-sm"
+                                >
+                                  <FileText className="h-4 w-4" />
+                                  View Text
+                                </Button>
+                              )}
+                              <Button 
+                                variant="outline" 
+                                onClick={() => handleNewImageSet(item)}
+                                disabled={processingNewImageSet.has(item.number)}
+                                className="whitespace-nowrap text-sm"
+                              >
+                                {getButtonText(item)}
+                              </Button>
+                            </div>
+                            <div className="flex gap-2 flex-1 justify-end">
+                              {item.image?.savedVersions?.map((version, idx) => (
+                                <div 
+                                  key={`${version.path}-${idx}`}
+                                  className="relative w-[55px] h-[96px] cursor-pointer hover:opacity-80 transition-opacity"
+                                  onClick={async () => {
+                                    if (swappingImages.has(version.path)) return
+                                    try {
+                                      setSwappingImages(prev => new Set([...prev, version.path, item.image!.path]))
+                                      await swapStoryboardImage({
+                                        originalPath: item.image!.path,
+                                        thumbnailPath: version.path
+                                      })
+                                      await fetchProject()
+                                    } catch (error) {
+                                      console.error('Error swapping images:', error)
+                                      toast.error(getUserFriendlyError(error))
+                                    } finally {
+                                      setSwappingImages(prev => {
+                                        const next = new Set(prev)
+                                        next.delete(version.path)
+                                        next.delete(item.image!.path)
+                                        return next
+                                      })
+                                    }
+                                  }}
+                                >
                                   <Image 
-                                    src={item.image.url} 
-                                    alt={`Storyboard ${item.number}`}
+                                    src={version.url}
+                                    alt={`Version ${idx + 1}`}
                                     fill
-                                    className={`object-cover rounded ${
-                                      swappingImages.has(item.image.path) ? 'opacity-50' : ''
+                                    className={`object-cover rounded-sm border border-gray-200 ${
+                                      swappingImages.has(version.path) ? 'opacity-50' : ''
                                     }`}
-                                    priority={item.number <= 2}
-                                    sizes="(max-width: 768px) 100vw, 341px"
+                                    sizes="55px"
                                   />
-                                  {swappingImages.has(item.image.path) && (
+                                  {swappingImages.has(version.path) && (
                                     <div className="absolute inset-0 flex items-center justify-center">
-                                      <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent" />
+                                      <div className="animate-spin h-4 w-4 border-2 border-primary rounded-full border-t-transparent" />
                                     </div>
                                   )}
                                 </div>
-                              )}
-                              <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded">
-                                {item.number}
-                              </div>
+                              ))}
+                              {Array.from({ length: Math.max(0, 3 - (item.image?.savedVersions?.length || 0)) }).map((_, i) => (
+                                <div 
+                                  key={i} 
+                                  className="relative w-[55px] h-[96px] border border-gray-200 rounded-sm bg-gray-50"
+                                />
+                              ))}
                             </div>
-                            
-                            <div className="flex gap-4 items-center mt-2">
-                              <div className="flex flex-col gap-2">
-                                {item.text?.content && (
-                                  <Button
-                                    variant="outline"
-                                    onClick={() => {
-                                      setSelectedText(item.text?.content || null)
-                                      setIsTextDialogOpen(true)
-                                    }}
-                                    className="flex items-center gap-2 text-sm"
-                                  >
-                                    <FileText className="h-4 w-4" />
-                                    View Text
-                                  </Button>
-                                )}
-                                <Button 
-                                  variant="outline" 
-                                  onClick={() => handleNewImageSet(item)}
-                                  disabled={processingNewImageSet.has(item.number)}
-                                  className="whitespace-nowrap text-sm"
+                          </div>
+                          
+                          <div className="border-t my-2" />
+                          
+                          <div className="space-y-2">
+                            {item.audio?.url ? (
+                              <div className="flex items-center gap-2">
+                                <AudioPlayer
+                                  audioUrl={item.audio.url}
+                                />
+                                <Button
+                                  variant="outline"
+                                  onClick={() => handleTrackSelection(1, item)}
+                                  disabled={switchingTrack !== null}
+                                  className="flex-none text-xs -mt-3 relative"
+                                  style={{ width: '90px', height: '70px' }}
                                 >
-                                  {getButtonText(item)}
+                                  <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
+                                    primaryTrack === 1 ? 'bg-green-500' : 'bg-gray-300'
+                                  }`} />
+                                  {switchingTrack === 1 ? 'Waiting...' : 'Track 1'}
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  onClick={() => handleNewAudio(item)}
+                                  disabled={generatingAudio.has(item.number) || switchingTrack !== null}
+                                  className="flex-none text-xs -mt-3 relative"
+                                  style={{ width: '90px', height: '70px' }}
+                                >
+                                  {generatingAudio.has(item.number)
+                                    ? 'Working...'
+                                    : 'New Audio'
+                                  }
                                 </Button>
                               </div>
-                              <div className="flex gap-2 flex-1 justify-end">
-                                {item.image?.savedVersions?.map((version, idx) => (
-                                  <div 
-                                    key={`${version.path}-${idx}`}
-                                    className="relative w-[55px] h-[96px] cursor-pointer hover:opacity-80 transition-opacity"
-                                    onClick={async () => {
-                                      if (swappingImages.has(version.path)) return
-                                      try {
-                                        setSwappingImages(prev => new Set([...prev, version.path, item.image!.path]))
-                                        await swapStoryboardImage({
-                                          originalPath: item.image!.path,
-                                          thumbnailPath: version.path
-                                        })
-                                        await fetchProject()
-                                      } catch (error) {
-                                        console.error('Error swapping images:', error)
-                                        toast.error(getUserFriendlyError(error))
-                                      } finally {
-                                        setSwappingImages(prev => {
-                                          const next = new Set(prev)
-                                          next.delete(version.path)
-                                          next.delete(item.image!.path)
-                                          return next
-                                        })
-                                      }
-                                    }}
-                                  >
-                                    <Image 
-                                      src={version.url}
-                                      alt={`Version ${idx + 1}`}
-                                      fill
-                                      className={`object-cover rounded-sm border border-gray-200 ${
-                                        swappingImages.has(version.path) ? 'opacity-50' : ''
-                                      }`}
-                                      sizes="55px"
-                                    />
-                                    {swappingImages.has(version.path) && (
-                                      <div className="absolute inset-0 flex items-center justify-center">
-                                        <div className="animate-spin h-4 w-4 border-2 border-primary rounded-full border-t-transparent" />
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                                {Array.from({ length: Math.max(0, 3 - (item.image?.savedVersions?.length || 0)) }).map((_, i) => (
-                                  <div 
-                                    key={i} 
-                                    className="relative w-[55px] h-[96px] border border-gray-200 rounded-sm bg-gray-50"
-                                  />
-                                ))}
+                            ) : (
+                              <div className="h-[70px] flex items-center justify-center">
+                                <p className="text-sm text-muted-foreground">Audio file not found</p>
                               </div>
-                            </div>
-                            
-                            <div className="border-t my-2" />
-                            
-                            <div className="space-y-2">
-                              {item.audio?.url ? (
-                                <div className="flex items-center gap-2">
-                                  <AudioPlayer
-                                    audioUrl={item.audio.url}
-                                  />
-                                  <Button
-                                    variant="outline"
-                                    onClick={() => handleTrackSelection(1, item)}
-                                    disabled={switchingTrack !== null}
-                                    className="flex-none text-xs -mt-3 relative"
-                                    style={{ width: '90px', height: '70px' }}
-                                  >
-                                    <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
-                                      primaryTrack === 1 ? 'bg-green-500' : 'bg-gray-300'
-                                    }`} />
-                                    {switchingTrack === 1 ? 'Waiting...' : 'Track 1'}
-                                  </Button>
-                                  <Button
-                                    variant="outline"
-                                    onClick={() => handleNewAudio(item)}
-                                    disabled={generatingAudio.has(item.number) || switchingTrack !== null}
-                                    className="flex-none text-xs -mt-3 relative"
-                                    style={{ width: '90px', height: '70px' }}
-                                  >
-                                    {generatingAudio.has(item.number)
-                                      ? 'Working...'
-                                      : 'New Audio'
-                                    }
-                                  </Button>
-                                </div>
-                              ) : (
-                                <div className="h-[70px] flex items-center justify-center">
-                                  <p className="text-sm text-muted-foreground">Audio file not found</p>
-                                </div>
-                              )}
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )
-                    })}
+                            )}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
                   </div>
                   {items.length > 1 && (
                     <>
