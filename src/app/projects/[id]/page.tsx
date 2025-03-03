@@ -21,7 +21,8 @@ import {
   deleteProjectFile,
   saveAudioToOldSet,
   restoreAudioFromOldSet,
-  checkAudioTrackExists
+  checkAudioTrackExists,
+  getVoiceDataFile
 } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
@@ -35,10 +36,25 @@ interface Project {
   id: string
   project_name: string
   book_title: string
+  author_name: string
   description: string
   status: string
   epub_file_path: string
   cover_file_path: string
+}
+
+interface Voice {
+  voice_id: string
+  name: string
+  labels?: {
+    accent?: string
+    description?: string
+    age?: string
+    gender?: string
+    use_case?: string
+    [key: string]: string | undefined
+  }
+  preview_url?: string
 }
 
 interface StoryboardItem {
@@ -190,6 +206,15 @@ export default function ProjectDetail() {
   const [processingNewAudio, setProcessingNewAudio] = useState<Set<number>>(new Set())
   // Add a state to track audio remount keys
   const [audioRemountKeys, setAudioRemountKeys] = useState<Record<number, number>>({});
+  
+  // Add voice-related state
+  const [voices, setVoices] = useState<Voice[]>([])
+  const [selectedVoice, setSelectedVoice] = useState<string>("")
+  const [isPlayingPreview, setIsPlayingPreview] = useState(false)
+  const audioRef = useRef<HTMLAudioElement>(null)
+
+  // Add error state for voice data
+  const [voiceDataError, setVoiceDataError] = useState<string | null>(null)
 
   const fetchProject = useCallback(async () => {
     try {
@@ -215,6 +240,46 @@ export default function ProjectDetail() {
 
       if (status) {
         setProjectStatus(status)
+      }
+
+      // Load voice data if it exists
+      try {
+        const voiceData = await getVoiceDataFile({
+          userId: session.user.id,
+          projectId: project.id
+        })
+        
+        console.log('Voice data loaded directly from R2:', voiceData)
+        
+        if (voiceData?.voices && Array.isArray(voiceData.voices)) {
+          console.log('Setting voices array:', voiceData.voices.length)
+          setVoices(voiceData.voices)
+          // Set default selected voice if available
+          if (voiceData.voices.length > 0) {
+            setSelectedVoice(voiceData.voices[0].voice_id)
+          }
+        } else {
+          console.log('No voice data found or invalid format')
+          // Set default voices for testing if no file is found
+          const defaultVoices = [
+            {
+              voice_id: "default1",
+              name: "Default Voice 1",
+              preview_url: "https://example.com/preview1.mp3"
+            },
+            {
+              voice_id: "default2",
+              name: "Default Voice 2",
+              preview_url: "https://example.com/preview2.mp3"
+            }
+          ]
+          console.log('Setting default voices for testing');
+          setVoices(defaultVoices);
+          setSelectedVoice(defaultVoices[0].voice_id);
+        }
+      } catch (error) {
+        console.error('Error loading voice data:', error)
+        setVoiceDataError('Failed to load voice data. Please try again later.')
       }
 
       // Step 1: Get signed URLs for all files
@@ -441,6 +506,42 @@ export default function ProjectDetail() {
       console.log('Skip replace confirmation preference found in cookie');
     }
   }, []);
+
+  // Replace the useEffect that checks for voice data after intake
+  useEffect(() => {
+    if (projectStatus?.Ebook_Prep_Status === 'Complete' && project) {
+      console.log('Ebook processing complete, checking for voice data file...')
+      
+      const checkForVoiceData = async () => {
+        try {
+          setVoiceDataError(null)
+          const { data: { session } } = await supabase.auth.getSession()
+          if (!session) return
+          
+          const voiceData = await getVoiceDataFile({
+            userId: session.user.id,
+            projectId: project.id
+          })
+          
+          console.log('Voice data check after intake:', voiceData)
+          
+          if (voiceData?.voices && Array.isArray(voiceData.voices) && voiceData.voices.length > 0) {
+            setVoices(voiceData.voices)
+            setSelectedVoice(voiceData.voices[0].voice_id)
+            setVoiceDataError(null)
+          } else {
+            console.error('Voice data file not found or empty after intake')
+            setVoiceDataError('Voice data file not found after intake. Please try reprocessing the ebook.')
+          }
+        } catch (error) {
+          console.error('Error checking for voice data:', error)
+          setVoiceDataError('Failed to load voice data. Please try again later.')
+        }
+      }
+      
+      checkForVoiceData()
+    }
+  }, [projectStatus?.Ebook_Prep_Status, project])
 
   const handleScrollSliderChange = (value: number[]) => {
     setSliderValue(value[0])
@@ -704,6 +805,7 @@ export default function ProjectDetail() {
         .update({
           project_name: editFormData.project_name,
           book_title: editFormData.book_title,
+          author_name: editFormData.author_name,
           description: editFormData.description,
           cover_file_path: newCoverPath,
         })
@@ -754,12 +856,35 @@ export default function ProjectDetail() {
       // Force immediate status refresh
       await fetchProject()
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -si`
+      // Use the author_name and book_title from the project
+      const authorName = project.author_name || "Mike Langlois"; // Default if not set
+      const bookTitle = project.book_title || "Walker"; // Use project book_title or default
+
+      // Use the selected voice ID instead of hardcoded "Abe"
+      const voiceId = selectedVoice || "Abe"; // Default to "Abe" if no voice selected
+
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceId}" -l 2 -si`
       await sendCommand(command)
       toast.success('Processing started')
     } catch (error) {
       console.error('Error processing epub:', error)
       toast.error('Failed to start processing')
+    }
+  }
+
+  // Add function to play voice preview
+  const playVoicePreview = () => {
+    if (!audioRef.current) return
+    
+    const selectedVoiceData = voices.find(voice => voice.voice_id === selectedVoice)
+    if (!selectedVoiceData?.preview_url) return
+    
+    audioRef.current.src = selectedVoiceData.preview_url
+    audioRef.current.play()
+    setIsPlayingPreview(true)
+    
+    audioRef.current.onended = () => {
+      setIsPlayingPreview(false)
     }
   }
 
@@ -791,7 +916,11 @@ export default function ProjectDetail() {
 
       await fetchProject()
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -ss`
+      // Use the author_name and book_title from the project
+      const authorName = project.author_name || "Mike Langlois"; // Default if not set
+      const bookTitle = project.book_title || "Walker"; // Use project book_title or default
+
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "Abe" -l 2 -ss`
       await sendCommand(command)
       toast.success('Generation started')
     } catch (error) {
@@ -828,7 +957,11 @@ export default function ProjectDetail() {
 
       await fetchProject()
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "Mike Langlois" -ti "Walker" -vn "Abe" -l 2 -sb`
+      // Use the author_name and book_title from the project
+      const authorName = project.author_name || "Mike Langlois"; // Default if not set
+      const bookTitle = project.book_title || "Walker"; // Use project book_title or default
+
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "Abe" -l 2 -sb`
       await sendCommand(command)
       toast.success('Generation started')
     } catch (error) {
@@ -1069,11 +1202,19 @@ export default function ProjectDetail() {
     }
   }, [items, determineActiveTrack]);
 
+  // Add a useEffect to debug the voices state
+  useEffect(() => {
+    console.log('Voices state:', voices, 'selectedVoice:', selectedVoice)
+  }, [voices, selectedVoice])
+
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
 
   return (
-    <div className="container mx-auto p-4 space-y-8">
+    <div className="container mx-auto px-4 py-8">
+      {/* Hidden audio element for voice preview */}
+      <audio ref={audioRef} className="hidden" />
+      
       <div className="flex items-start gap-6">
         {/* Cover Image - reduced to 50% size */}
         {coverUrl && (
@@ -1098,6 +1239,10 @@ export default function ProjectDetail() {
               <span className="text-gray-700">{project?.book_title}</span>
             </p>
             <p className="text-sm">
+              <span className="font-medium">Author: </span>
+              <span className="text-gray-700">{project?.author_name}</span>
+            </p>
+            <p className="text-sm">
               <span className="font-medium">Description: </span>
               <span className="text-gray-700">{project?.description}</span>
             </p>
@@ -1111,7 +1256,18 @@ export default function ProjectDetail() {
             )}
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => setIsEditDialogOpen(true)}>
+            <Button variant="outline" onClick={() => {
+              // Populate the form with current project data
+              if (project) {
+                setEditFormData({
+                  project_name: project.project_name,
+                  book_title: project.book_title,
+                  author_name: project.author_name,
+                  description: project.description
+                });
+              }
+              setIsEditDialogOpen(true);
+            }}>
               Edit Project
             </Button>
             <Button variant="destructive" onClick={() => setIsDeleteDialogOpen(true)}>
@@ -1153,14 +1309,139 @@ export default function ProjectDetail() {
           <TabsContent value="intake">
             <Card className="p-2 border-0 shadow-none">
               <div className="flex justify-between items-center mb-4">
-                <p className="text-3xl font-bold">Intake Tab Here</p>
+                <p className="text-3xl font-bold">Audiobook Preparation</p>
                 <Button 
                   variant="outline"
                   onClick={handleProcessEpub}
                   disabled={!getIntakeButtonState(projectStatus?.Ebook_Prep_Status).enabled}
+                  className={getIntakeButtonState(projectStatus?.Ebook_Prep_Status).label === "Intake Complete" ? "bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200" : ""}
                 >
                   {getIntakeButtonState(projectStatus?.Ebook_Prep_Status).label}
                 </Button>
+              </div>
+              
+              <div className="space-y-4 max-w-2xl">
+                <p className="text-sm text-gray-600">
+                  These values will be used when generating the audiobook. They can be changed at any time before the audiobook is created.
+                </p>
+                
+                {/* Book and Author Information Section */}
+                <div className="space-y-4 border p-4 rounded-md">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Book Title</label>
+                    <div className="flex gap-2">
+                      <Input
+                        value={project?.book_title || ''}
+                        readOnly
+                        className="bg-gray-50"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Author Name</label>
+                    <div className="flex gap-2">
+                      <Input
+                        value={project?.author_name || ''}
+                        readOnly
+                        className="bg-gray-50"
+                      />
+                    </div>
+                  </div>
+                  
+                  <Button 
+                    variant="outline" 
+                    onClick={() => {
+                      // Populate the form with current project data
+                      if (project) {
+                        setEditFormData({
+                          project_name: project.project_name,
+                          book_title: project.book_title,
+                          author_name: project.author_name,
+                          description: project.description
+                        });
+                      }
+                      setIsEditDialogOpen(true);
+                    }}
+                  >
+                    Edit Information
+                  </Button>
+                </div>
+                
+                {/* Voice Selection Section */}
+                <div className="space-y-4 border p-4 rounded-md">
+                  <h3 className="text-md font-medium">Voice Selection</h3>
+                  <p className="text-sm text-gray-600">
+                    Select a voice that will be used to create the storyboard files.
+                  </p>
+                  
+                  {voiceDataError && (
+                    <div className="mb-4 p-3 bg-red-100 text-red-800 rounded-md">
+                      {voiceDataError}
+                    </div>
+                  )}
+                  
+                  <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+                    <div className="w-full sm:w-64">
+                      <select
+                        value={selectedVoice}
+                        onChange={(e) => setSelectedVoice(e.target.value)}
+                        className="w-full p-2 border rounded"
+                      >
+                        {voices.length === 0 ? (
+                          <option value="">No voices available</option>
+                        ) : (
+                          voices.map((voice) => (
+                            <option key={voice.voice_id} value={voice.voice_id}>
+                              {voice.name}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                    
+                    <button
+                      onClick={playVoicePreview}
+                      disabled={!selectedVoice || voices.length === 0 || isPlayingPreview || !voices.find(v => v.voice_id === selectedVoice)?.preview_url}
+                      className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
+                    >
+                      {isPlayingPreview ? 'Playing...' : 'Play Preview'}
+                    </button>
+                    
+                    <audio ref={audioRef} className="hidden" controls />
+                  </div>
+                  
+                  {/* Voice Labels Display */}
+                  {selectedVoice && voices.length > 0 && (
+                    <div className="mt-4">
+                      <h4 className="text-sm font-medium mb-2">Voice Characteristics</h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        {/* Display standard labels if available */}
+                        {voices.find(v => v.voice_id === selectedVoice)?.labels && 
+                         Object.keys(voices.find(v => v.voice_id === selectedVoice)?.labels || {}).length > 0 ? 
+                          Object.entries(voices.find(v => v.voice_id === selectedVoice)?.labels || {}).map(([key, value]) => (
+                            <div key={key} className="flex flex-col">
+                              <span className="text-xs font-medium text-gray-500 capitalize">{key}</span>
+                              <span className="text-sm">{value}</span>
+                            </div>
+                          ))
+                          : 
+                          <div className="col-span-2 text-sm text-gray-500">
+                            No characteristics available for this voice.
+                          </div>
+                        }
+                        
+                        {/* Always show Preview availability */}
+                        <div className="flex flex-col">
+                          <span className="text-xs font-medium text-gray-500">Preview</span>
+                          <span className="text-sm">
+                            {voices.find(v => v.voice_id === selectedVoice)?.preview_url ? 'Yes' : 'No'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </Card>
           </TabsContent>
@@ -1173,6 +1454,7 @@ export default function ProjectDetail() {
                   variant="outline"
                   onClick={handleGenerateStoryboard}
                   disabled={!getStoryboardButtonState(projectStatus?.Storyboard_Status).enabled}
+                  className={getStoryboardButtonState(projectStatus?.Storyboard_Status).label === "Storyboard Complete" ? "bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200" : ""}
                 >
                   {getStoryboardButtonState(projectStatus?.Storyboard_Status).label}
                 </Button>
@@ -1417,6 +1699,7 @@ export default function ProjectDetail() {
                   variant="outline"
                   onClick={handleGenerateAudiobook}
                   disabled={!getAudiobookButtonState(projectStatus?.Audiobook_Status).enabled}
+                  className={getAudiobookButtonState(projectStatus?.Audiobook_Status).label === "Audiobook Complete" ? "bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200" : ""}
                 >
                   {getAudiobookButtonState(projectStatus?.Audiobook_Status).label}
                 </Button>
@@ -1544,6 +1827,15 @@ export default function ProjectDetail() {
               />
             </div>
             <div>
+              <label className="block text-sm font-medium mb-1">Author *</label>
+              <Input
+                value={editFormData.author_name}
+                onChange={(e) => setEditFormData({ ...editFormData, author_name: e.target.value })}
+                placeholder="Enter author name"
+                disabled={isEditing}
+              />
+            </div>
+            <div>
               <label className="block text-sm font-medium mb-1">Description</label>
               <Textarea
                 value={editFormData.description}
@@ -1555,7 +1847,7 @@ export default function ProjectDetail() {
             <div>
               <label className="block text-sm font-medium mb-1">Update Cover Image</label>
               <p className="text-sm text-gray-500 mb-2">Optional. JPG, PNG, or WebP files supported</p>
-              <div className="mt-1 flex items-center">
+              <div className="flex flex-col gap-2">
                 <Input
                   type="file"
                   accept="image/jpeg,image/png,image/webp"
@@ -1572,7 +1864,9 @@ export default function ProjectDetail() {
                     setSelectedNewCover(file);
                   }}
                   disabled={isEditing}
-                  className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"
+                  className="h-[40px] text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 
+                            file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 
+                            hover:file:bg-violet-100"
                 />
               </div>
               {selectedNewCover && (

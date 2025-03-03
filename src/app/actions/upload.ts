@@ -9,6 +9,7 @@ export async function uploadFile(formData: FormData, userId: string) {
   try {
     const projectName = formData.get('project_name') as string
     const bookTitle = formData.get('book_title') as string
+    const authorName = formData.get('author_name') as string
     const description = formData.get('description') as string
     const file = formData.get('file') as Blob & { name?: string }
     const cover = formData.get('cover') as Blob & { name?: string }
@@ -27,6 +28,7 @@ export async function uploadFile(formData: FormData, userId: string) {
         {
           project_name: projectName,
           book_title: bookTitle,
+          author_name: authorName,
           description: description,
           user_id: userId,
           status: 'pending'

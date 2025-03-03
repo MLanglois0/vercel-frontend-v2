@@ -18,6 +18,7 @@ interface Project {
   id: string;
   project_name: string;
   book_title: string;
+  author_name: string;
   description: string;
   epub_file_path?: string;
   cover_file_path?: string;
@@ -48,6 +49,7 @@ export default function Projects() {
   const [formData, setFormData] = useState({
     project_name: '',
     book_title: '',
+    author_name: '',
     description: '',
   });
   const [isCreating, setIsCreating] = useState(false);
@@ -150,7 +152,7 @@ export default function Projects() {
       return
     }
 
-    if (!formData.project_name || !formData.book_title) {
+    if (!formData.project_name || !formData.book_title || !formData.author_name) {
       toast.error('Please fill out all required fields')
       return
     }
@@ -173,13 +175,14 @@ export default function Projects() {
       uploadFormData.append('cover', selectedCover)
       uploadFormData.append('project_name', formData.project_name)
       uploadFormData.append('book_title', formData.book_title)
+      uploadFormData.append('author_name', formData.author_name || '')
       uploadFormData.append('description', formData.description || '')
 
       await uploadFile(uploadFormData, session.user.id)
       
       toast.dismiss(loadingToast)
       toast.success('Project created successfully')
-      setFormData({ project_name: '', book_title: '', description: '' })
+      setFormData({ project_name: '', book_title: '', author_name: '', description: '' })
       setSelectedFile(null)
       setSelectedCover(null)
       setShowNewProject(false)
@@ -225,6 +228,15 @@ export default function Projects() {
                 value={formData.book_title}
                 onChange={(e) => setFormData({ ...formData, book_title: e.target.value })}
                 placeholder="Enter book title"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Author Name *</label>
+              <Input
+                value={formData.author_name}
+                onChange={(e) => setFormData({ ...formData, author_name: e.target.value })}
+                placeholder="Enter author name"
                 required
               />
             </div>
@@ -282,9 +294,9 @@ export default function Projects() {
         {projects.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {projects.map((project) => (
-              <Card key={project.id} className="flex overflow-hidden h-[180px]">
+              <Card key={project.id} className="flex overflow-hidden h-[200px]">
                 {project.cover_file_path && coverUrls[project.id] && (
-                  <div className="relative w-[120px] h-[180px] flex-shrink-0">
+                  <div className="relative w-[120px] h-[200px] flex-shrink-0">
                     <Image
                       src={coverUrls[project.id]}
                       alt={`Cover for ${project.book_title}`}
@@ -306,6 +318,10 @@ export default function Projects() {
                         <span className="text-gray-700">{project.book_title}</span>
                       </p>
                       <p className="text-sm">
+                        <span className="font-medium">Author: </span>
+                        <span className="text-gray-700">{project.author_name}</span>
+                      </p>
+                      <p className="text-sm">
                         <span className="font-medium">Description: </span>
                         <span className="text-gray-700">{project.description}</span>
                       </p>
@@ -317,7 +333,7 @@ export default function Projects() {
                       </p>
                     </div>
                   </CardContent>
-                  <CardFooter className="pt-0 pb-0">
+                  <CardFooter className="pt-2 pb-3">
                     <Button 
                       variant="outline" 
                       className="w-full"

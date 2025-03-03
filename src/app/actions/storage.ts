@@ -13,7 +13,7 @@ interface SignedFileResponse {
   content?: string
 }
 
-type FileType = 'image' | 'audio' | 'text' | 'epub' | 'video'
+type FileType = 'image' | 'audio' | 'text' | 'epub' | 'video' | 'json'
 
 interface UploadResult {
   url: string
@@ -30,6 +30,23 @@ interface ProjectStatus {
   Ebook_Prep_Status: string;
   Storyboard_Status: string;
   Audiobook_Status: string;
+}
+
+// Add a Voice interface
+interface VoiceData {
+  voices: Array<{
+    voice_id: string
+    name: string
+    labels?: {
+      accent?: string
+      description?: string
+      age?: string
+      gender?: string
+      use_case?: string
+      [key: string]: string | undefined
+    }
+    preview_url?: string
+  }>
 }
 
 export async function listProjectFiles(userId: string, projectId: string) {
@@ -168,6 +185,16 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
           type = 'text'
           const match = fileName.match(/chunk(\d+)\.txt$/)
           if (match) number = parseInt(match[1])
+          
+          const getCommand = new GetObjectCommand({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Key: file.Key,
+          })
+          const response = await r2Client.send(getCommand)
+          content = await response.Body?.transformToString()
+        } else if (/\.json$/.test(fileName)) {
+          // Handle JSON files
+          type = 'json'
           
           const getCommand = new GetObjectCommand({
             Bucket: process.env.R2_BUCKET_NAME,
@@ -694,6 +721,44 @@ export async function refreshProjectFiles({
   } catch (error) {
     console.error('Error refreshing project files:', error)
     throw new Error(getUserFriendlyError(error))
+  }
+}
+
+export async function getVoiceDataFile({
+  userId,
+  projectId
+}: {
+  userId: string
+  projectId: string
+}): Promise<VoiceData | null> {
+  try {
+    const voiceDataFilePath = `${userId}/${projectId}/temp/project_voice_data.json`
+    
+    const getCommand = new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: voiceDataFilePath
+    })
+
+    try {
+      const response = await r2Client.send(getCommand)
+      const voiceDataContent = await response.Body?.transformToString()
+      
+      if (voiceDataContent) {
+        return JSON.parse(voiceDataContent) as VoiceData
+      }
+    } catch (error) {
+      // If file doesn't exist, return null
+      if (error instanceof Error && 'name' in error && error.name === 'NoSuchKey') {
+        console.log(`Voice data file not found at ${voiceDataFilePath}`)
+        return null
+      }
+      throw error
+    }
+    
+    return null
+  } catch (error) {
+    console.error('Error fetching voice data file:', error)
+    throw error
   }
 }
 
