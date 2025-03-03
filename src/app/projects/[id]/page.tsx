@@ -11,15 +11,15 @@ import { ChevronLeft, ChevronRight, FileText } from "lucide-react"
 import { toast } from 'sonner'
 import { 
   getSignedImageUrls, 
-  deleteProjectFile, 
-  saveAudioHistory, 
-  swapStoryboardImage, 
-  uploadProjectFile, 
-  updateProjectStatus, 
   getProjectStatus, 
   deleteProjectFolder,
   renameImageToOldSet,
-  restoreImageFromOldSet
+  restoreImageFromOldSet,
+  saveAudioHistory,
+  swapStoryboardImage,
+  uploadProjectFile,
+  updateProjectStatus,
+  deleteProjectFile
 } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
@@ -422,6 +422,18 @@ export default function ProjectDetail() {
     }
   }, [projectStatus?.Storyboard_Status])
 
+  // Check for the cookie on component mount
+  useEffect(() => {
+    const skipReplaceConfirmation = document.cookie
+      .split('; ')
+      .find(row => row.startsWith('skipReplaceConfirmation='))
+      ?.split('=')[1];
+    
+    if (skipReplaceConfirmation === 'true') {
+      console.log('Skip replace confirmation preference found in cookie');
+    }
+  }, []);
+
   const handleScrollSliderChange = (value: number[]) => {
     setSliderValue(value[0])
     if (scrollContainerRef.current) {
@@ -710,14 +722,36 @@ export default function ProjectDetail() {
     
     const isRestoreAction = checkForJpgoldset(item.number)
     
-    // If this is a replace action (not restore), show confirmation dialog
+    // If this is a replace action (not restore), check if we should show confirmation
     if (!isRestoreAction) {
-      setConfirmReplaceItem(item)
-      return
+      // Check for the cookie
+      const skipReplaceConfirmation = document.cookie
+        .split('; ')
+        .find(row => row.startsWith('skipReplaceConfirmation='))
+        ?.split('=')[1];
+      
+      if (skipReplaceConfirmation === 'true') {
+        // Skip confirmation and proceed directly
+        await processImageAction(item);
+      } else {
+        // Show confirmation dialog
+        setConfirmReplaceItem(item);
+      }
+      return;
     }
     
     // Otherwise, proceed with the restore action
-    await processImageAction(item)
+    await processImageAction(item);
+  }
+  
+  // Function to save the preference to a cookie
+  const savePreferenceToCookie = () => {
+    // Set cookie to expire in 1 year
+    const expiryDate = new Date();
+    expiryDate.setFullYear(expiryDate.getFullYear() + 1);
+    
+    document.cookie = `skipReplaceConfirmation=true; expires=${expiryDate.toUTCString()}; path=/`;
+    console.log('Saved preference to cookie');
   }
   
   // New function to handle the actual image processing
@@ -1405,24 +1439,40 @@ export default function ProjectDetail() {
               primary image. Are you sure you want to proceed?
             </p>
           </div>
-          <DialogFooter className="flex justify-between sm:justify-between">
+          <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:justify-between">
             <Button
               type="button"
               variant="outline"
-              onClick={() => setConfirmReplaceItem(null)}
+              onClick={() => {
+                setConfirmReplaceItem(null);
+              }}
             >
               Cancel
             </Button>
-            <Button
-              type="button"
-              onClick={() => {
-                const item = confirmReplaceItem
-                setConfirmReplaceItem(null)
-                if (item) processImageAction(item)
-              }}
-            >
-              Proceed
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  savePreferenceToCookie();
+                  const item = confirmReplaceItem;
+                  setConfirmReplaceItem(null);
+                  if (item) processImageAction(item);
+                }}
+              >
+                Proceed & Don&apos;t Show Again
+              </Button>
+              <Button
+                type="button"
+                onClick={() => {
+                  const item = confirmReplaceItem;
+                  setConfirmReplaceItem(null);
+                  if (item) processImageAction(item);
+                }}
+              >
+                Proceed
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
