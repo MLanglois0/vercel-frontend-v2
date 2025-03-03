@@ -15,11 +15,13 @@ import {
   deleteProjectFolder,
   renameImageToOldSet,
   restoreImageFromOldSet,
-  saveAudioHistory,
   swapStoryboardImage,
   uploadProjectFile,
   updateProjectStatus,
-  deleteProjectFile
+  deleteProjectFile,
+  saveAudioToOldSet,
+  restoreAudioFromOldSet,
+  checkAudioTrackExists
 } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
@@ -161,17 +163,12 @@ export default function ProjectDetail() {
   const [confirmProjectName, setConfirmProjectName] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
   const router = useRouter()
-  const [generatingAudio, setGeneratingAudio] = useState<Set<number>>(new Set())
-  const [primaryTrack, setPrimaryTrack] = useState<1 | 2>(1)
-  const [hasSecondTrack, setHasSecondTrack] = useState(false)
-  const [switchingTrack, setSwitchingTrack] = useState<1 | 2 | null>(null)
+  const [primaryTrack, setPrimaryTrack] = useState<number>(1)
+  const [hasTrack2, setHasTrack2] = useState<Set<number>>(new Set())
+  const forcedTrack2ItemsRef = useRef<Set<number>>(new Set())
   const [swappingImages, setSwappingImages] = useState<Set<string>>(new Set())
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
-  const [editFormData, setEditFormData] = useState({
-    project_name: '',
-    book_title: '',
-    description: '',
-  })
+  const [editFormData, setEditFormData] = useState<Partial<Project>>({})
   const [selectedNewCover, setSelectedNewCover] = useState<File | null>(null)
   const [isEditing, setIsEditing] = useState(false)
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
@@ -181,6 +178,7 @@ export default function ProjectDetail() {
   const [processingItems, setProcessingItems] = useState<Set<number>>(new Set())
   const [isReplaceImagesInProgress, setIsReplaceImagesInProgress] = useState(false)
   const [confirmReplaceItem, setConfirmReplaceItem] = useState<StoryboardItem | null>(null)
+  const [processingNewAudio, setProcessingNewAudio] = useState<Set<number>>(new Set())
 
   const fetchProject = useCallback(async () => {
     try {
@@ -203,7 +201,7 @@ export default function ProjectDetail() {
         userId: session.user.id,
         projectId: project.id
       })
-      
+
       if (status) {
         setProjectStatus(status)
       }
@@ -349,7 +347,6 @@ export default function ProjectDetail() {
         return item
       })
 
-      setHasSecondTrack(groupedItems.some(item => item.audio?.savedVersion))
       setItems(groupedItems)
     } catch (error) {
       console.error('Error fetching project:', error)
@@ -470,83 +467,222 @@ export default function ProjectDetail() {
     }
   }
 
+  // Add a function to check for track 2 existence
+  const checkForTrack2 = useCallback(async () => {
+    if (!items.length) return;
+    
+    const newHasTrack2 = new Set<number>();
+    
+    // First add all items from the forcedTrack2ItemsRef
+    forcedTrack2ItemsRef.current.forEach(itemNumber => {
+      newHasTrack2.add(itemNumber);
+    });
+    
+    // Then check for actual track files
+    for (const item of items) {
+      if (item.audio?.path) {
+        // Check if track 2 exists
+        const track2Exists = await checkAudioTrackExists({
+          audioPath: item.audio.path,
+          trackNumber: 2
+        });
+        
+        // Check if track 1 exists
+        const track1Exists = await checkAudioTrackExists({
+          audioPath: item.audio.path,
+          trackNumber: 1
+        });
+        
+        // If either track exists, we should show both Track 1 and Track 2 buttons
+        if (track2Exists || track1Exists) {
+          newHasTrack2.add(item.number);
+        }
+      }
+    }
+    
+    setHasTrack2(newHasTrack2);
+  }, [items]);
+
+  // Check for track 2 when items change
+  useEffect(() => {
+    checkForTrack2();
+  }, [items, checkForTrack2]);
+
+  // Modify the handleNewAudio function
   const handleNewAudio = async (item: StoryboardItem) => {
+    if (!item.audio?.path || processingNewAudio.has(item.number)) return;
+    
     try {
-      if (generatingAudio.has(item.number)) return
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('No session');
+      if (!project) throw new Error('No project');
       
-      if (!item.audio?.path) throw new Error('No audio path found')
+      // Store the item number to preserve track2 status
+      const itemNumber = item.number;
       
-      setGeneratingAudio(prev => new Set(prev).add(item.number))
-
-      // Call server action to handle all R2 operations
-      await saveAudioHistory({
-        originalPath: item.audio.path
-      })
-
-      setHasSecondTrack(true)
-      setPrimaryTrack(2)
+      setProcessingNewAudio(prev => new Set(prev).add(itemNumber));
       
-      await fetchProject()
+      // Save the current audio (Track 1) to oldset1
+      await saveAudioToOldSet({
+        audioPath: item.audio.path,
+        trackNumber: 1
+      });
+      
+      // Update hasTrack2 state to show Track 2 button immediately
+      setHasTrack2(prev => {
+        const newSet = new Set(prev);
+        newSet.add(itemNumber);
+        return newSet;
+      });
+      
+      // Trigger storyboard generation to create new audio
+      await handleGenerateStoryboard();
+      
+      // Add a delay before starting to check for completion
+      setTimeout(() => {
+        const checkInterval = setInterval(async () => {
+          const status = await getProjectStatus({
+            userId: session.user.id,
+            projectId: project.id
+          });
+          
+          if (status?.Storyboard_Status === "Storyboard Complete") {
+            clearInterval(checkInterval);
+            setProcessingNewAudio(prev => {
+              const next = new Set(prev);
+              next.delete(itemNumber);
+              return next;
+            });
+            
+            // Set track 2 as primary since the new audio is now the original file
+            setPrimaryTrack(2);
+            
+            // Fetch the updated project data
+            await fetchProject();
+            
+            // After fetchProject completes, find the updated item and refresh its audio URL
+            // This ensures the audio player reloads with the new audio file
+            setItems(prevItems => 
+              prevItems.map(prevItem => 
+                prevItem.number === itemNumber && prevItem.audio
+                  ? {
+                      ...prevItem,
+                      audio: {
+                        ...prevItem.audio,
+                        url: `${prevItem.audio.url.split('?')[0]}?t=${Date.now()}`
+                      }
+                    }
+                  : prevItem
+              )
+            );
+            
+            // Force update hasTrack2 after fetchProject
+            setHasTrack2(prev => {
+              const newSet = new Set(prev);
+              newSet.add(itemNumber);
+              return newSet;
+            });
+          }
+        }, 5000); // Check every 5 seconds
+        
+        // Cleanup interval after 10 minutes to prevent infinite checking
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          setProcessingNewAudio(prev => {
+            const next = new Set(prev);
+            next.delete(itemNumber);
+            return next;
+          });
+        }, 600000);
+      }, 6000); // Initial 6 second delay
+      
     } catch (error) {
-      console.error('Error in handleNewAudio:', error)
-      toast.error(getUserFriendlyError(error))
-    } finally {
-      setGeneratingAudio(prev => {
-        const next = new Set(prev)
-        next.delete(item.number)
-        return next
-      })
+      console.error('Error generating new audio:', error);
+      toast.error(getUserFriendlyError(error));
+      setProcessingNewAudio(prev => {
+        const next = new Set(prev);
+        next.delete(item.number);
+        return next;
+      });
     }
-  }
+  };
 
+  // Modify the handleTrackSelection function
   const handleTrackSelection = async (track: 1 | 2, item: StoryboardItem) => {
+    if (!item.audio?.path || processingNewAudio.has(item.number)) return;
+    
+    // If this track is already primary, do nothing
+    if (primaryTrack === track) return;
+    
     try {
-      if (!hasSecondTrack || track === primaryTrack) return
+      // First check if the track exists
+      const trackExists = await checkAudioTrackExists({
+        audioPath: item.audio.path,
+        trackNumber: track
+      });
       
-      if (!item.audio?.path) throw new Error('No audio path found')
-
-      setSwitchingTrack(track)
-
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) throw new Error('No session')
-
-      // Create paths
-      const pathParts = item.audio.path.split('.')
-      const ext = pathParts.pop()
-      const basePath = pathParts.join('.')
-      const sbsavePath = `${basePath}_sbsave.${ext}`
-      const tempPath = `${basePath}_temp.${ext}`
-
-      // Step 1: Move original to temp
-      const { error: moveToTempError } = await supabase.storage
-        .from('projects')
-        .move(item.audio.path, tempPath)
-
-      if (moveToTempError) throw moveToTempError
-
-      // Step 2: Move sbsave to original
-      const { error: moveToOriginalError } = await supabase.storage
-        .from('projects')
-        .move(sbsavePath, item.audio.path)
-
-      if (moveToOriginalError) throw moveToOriginalError
-
-      // Step 3: Move temp to sbsave
-      const { error: moveToSbsaveError } = await supabase.storage
-        .from('projects')
-        .move(tempPath, sbsavePath)
-
-      if (moveToSbsaveError) throw moveToSbsaveError
-
-      setPrimaryTrack(track)
-      await fetchProject()
+      if (!trackExists) {
+        toast.error(`Track ${track} does not exist for this audio`);
+        return;
+      }
+      
+      setProcessingNewAudio(prev => new Set(prev).add(item.number));
+      
+      // Save the current audio (original) to the appropriate oldset
+      // If Track 1 is active and we're switching to Track 2, save to oldset1
+      // If Track 2 is active and we're switching to Track 1, save to oldset2
+      await saveAudioToOldSet({
+        audioPath: item.audio.path,
+        trackNumber: primaryTrack
+      });
+      
+      // Restore from the selected track's oldset to become the new original
+      const result = await restoreAudioFromOldSet({
+        audioPath: item.audio.path,
+        trackNumber: track
+      });
+      
+      if (!result.success) {
+        throw new Error(`Failed to restore audio from track ${track}`);
+      }
+      
+      // Update the primary track
+      setPrimaryTrack(track);
+      
+      // Instead of refreshing the entire project, just update the audio URL
+      // This avoids the server component error
+      if (item.audio) {
+        // Force a refresh of the audio element by creating a new URL with a timestamp
+        // This will trigger the useEffect in the AudioPlayer component
+        const refreshedUrl = `${item.audio.url.split('?')[0]}?t=${Date.now()}`;
+        
+        // Update the items state with the refreshed audio URL
+        setItems(prevItems => 
+          prevItems.map(prevItem => 
+            prevItem.number === item.number && prevItem.audio
+              ? {
+                  ...prevItem,
+                  audio: {
+                    ...prevItem.audio,
+                    url: refreshedUrl
+                  }
+                }
+              : prevItem
+          )
+        );
+      }
+      
     } catch (error) {
-      console.error('Error in handleTrackSelection:', error)
-      toast.error(getUserFriendlyError(error))
+      console.error('Error switching audio track:', error);
+      toast.error(getUserFriendlyError(error));
     } finally {
-      setSwitchingTrack(null)
+      setProcessingNewAudio(prev => {
+        const next = new Set(prev);
+        next.delete(item.number);
+        return next;
+      });
     }
-  }
+  };
 
   const handleEditProject = async () => {
     if (!project) return;
@@ -906,6 +1042,49 @@ export default function ProjectDetail() {
     return hasJpgoldset ? 'Restore Image' : 'Replace Images'
   }
 
+  // Add a function to determine which track is active
+  const determineActiveTrack = useCallback(async () => {
+    // For each item with audio, check which track exists as an oldset
+    for (const item of items) {
+      if (item.audio?.path) {
+        // Check if track1 exists as an oldset
+        const track1Exists = await checkAudioTrackExists({
+          audioPath: item.audio.path,
+          trackNumber: 1
+        });
+        
+        // Check if track2 exists as an oldset
+        const track2Exists = await checkAudioTrackExists({
+          audioPath: item.audio.path,
+          trackNumber: 2
+        });
+        
+        // If track1 exists as an oldset, then track2 is active (in the original slot)
+        if (track1Exists && !track2Exists) {
+          setPrimaryTrack(2);
+          return;
+        }
+        
+        // If track2 exists as an oldset, then track1 is active (in the original slot)
+        if (track2Exists && !track1Exists) {
+          setPrimaryTrack(1);
+          return;
+        }
+        
+        // If both exist or neither exist, default to track1
+        setPrimaryTrack(1);
+        return;
+      }
+    }
+  }, [items]);
+  
+  // Call determineActiveTrack when items change
+  useEffect(() => {
+    if (items.length > 0) {
+      determineActiveTrack();
+    }
+  }, [items, determineActiveTrack]);
+
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
 
@@ -1164,30 +1343,52 @@ export default function ProjectDetail() {
                                 <AudioPlayer
                                   audioUrl={item.audio.url}
                                 />
+                                
+                                {/* Always show Track 1 button */}
                                 <Button
                                   variant="outline"
                                   onClick={() => handleTrackSelection(1, item)}
-                                  disabled={switchingTrack !== null}
+                                  disabled={processingNewAudio.has(item.number)}
                                   className="flex-none text-xs -mt-3 relative"
                                   style={{ width: '90px', height: '70px' }}
                                 >
                                   <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
                                     primaryTrack === 1 ? 'bg-green-500' : 'bg-gray-300'
                                   }`} />
-                                  {switchingTrack === 1 ? 'Waiting...' : 'Track 1'}
+                                  Track 1
                                 </Button>
-                                <Button
-                                  variant="outline"
-                                  onClick={() => handleNewAudio(item)}
-                                  disabled={generatingAudio.has(item.number) || switchingTrack !== null}
-                                  className="flex-none text-xs -mt-3 relative"
-                                  style={{ width: '90px', height: '70px' }}
-                                >
-                                  {generatingAudio.has(item.number)
-                                    ? 'Working...'
-                                    : 'New Audio'
-                                  }
-                                </Button>
+                                
+                                {hasTrack2.has(item.number) ? (
+                                  <Button
+                                    variant="outline"
+                                    onClick={() => handleTrackSelection(2, item)}
+                                    disabled={processingNewAudio.has(item.number)}
+                                    className="flex-none text-xs -mt-3 relative"
+                                    style={{ width: '90px', height: '70px' }}
+                                  >
+                                    <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
+                                      primaryTrack === 2 ? 'bg-green-500' : 'bg-gray-300'
+                                    }`} />
+                                    Track 2
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    variant="outline"
+                                    onClick={() => handleNewAudio(item)}
+                                    disabled={processingNewAudio.has(item.number) || isReplaceImagesInProgress}
+                                    className="flex-none text-xs -mt-3 relative"
+                                    style={{ width: '90px', height: '70px' }}
+                                  >
+                                    {processingNewAudio.has(item.number) ? (
+                                      <div className="flex flex-col items-center">
+                                        <div className="animate-spin h-4 w-4 border-2 border-primary rounded-full border-t-transparent mb-1" />
+                                        <span>Processing</span>
+                                      </div>
+                                    ) : (
+                                      "New Audio"
+                                    )}
+                                  </Button>
+                                )}
                               </div>
                             ) : (
                               <div className="h-[70px] flex items-center justify-center">

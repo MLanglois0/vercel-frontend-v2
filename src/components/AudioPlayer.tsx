@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Pause, Play, SkipBack, SkipForward, FileText } from "lucide-react"
@@ -16,6 +16,30 @@ export function AudioPlayer({ audioUrl, textContent, onViewText }: AudioPlayerPr
   const [audioProgress, setAudioProgress] = useState(0)
   const [audioDuration, setAudioDuration] = useState(0)
   const audioRef = useRef<HTMLAudioElement>(null)
+
+  // Effect to reload the audio element when the URL changes
+  useEffect(() => {
+    if (audioRef.current) {
+      // Save the current play state
+      const wasPlaying = !audioRef.current.paused
+      
+      // Reset the audio element
+      audioRef.current.pause()
+      audioRef.current.load()
+      setAudioProgress(0)
+      
+      // If it was playing before, resume playback
+      if (wasPlaying) {
+        // Small delay to ensure the audio is loaded
+        setTimeout(() => {
+          if (audioRef.current) {
+            audioRef.current.play()
+              .catch(err => console.error("Error playing audio after reload:", err))
+          }
+        }, 100)
+      }
+    }
+  }, [audioUrl])
 
   const handlePlayPause = () => {
     if (!audioRef.current) return

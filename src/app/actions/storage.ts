@@ -1,6 +1,6 @@
 'use server'
 
-import { PutObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectCommand, CopyObjectCommand, DeleteObjectsCommand } from '@aws-sdk/client-s3'
+import { PutObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectCommand, CopyObjectCommand, DeleteObjectsCommand, HeadObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { r2Client } from '@/lib/r2'
 import { getUserFriendlyError } from '@/lib/error-handler'
@@ -571,6 +571,128 @@ export async function restoreImageFromOldSet({
     return { success: true }
   } catch (error) {
     console.error('Error restoring image from oldset:', error)
+    throw new Error(getUserFriendlyError(error))
+  }
+}
+
+export async function saveAudioToOldSet({
+  audioPath,
+  trackNumber
+}: {
+  audioPath: string
+  trackNumber: number
+}): Promise<{ success: boolean }> {
+  // Create the oldset path by replacing .mp3 with .mp3oldset{trackNumber}
+  const oldsetPath = audioPath.replace(/\.mp3$/, `.mp3oldset${trackNumber}`)
+
+  try {
+    // Save by copying to oldset
+    await r2Client.send(new CopyObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      CopySource: `${process.env.R2_BUCKET_NAME}/${audioPath}`,
+      Key: oldsetPath,
+    }))
+
+    return { success: true }
+  } catch (error) {
+    console.error(`Error saving audio to oldset${trackNumber}:`, error)
+    throw new Error(getUserFriendlyError(error))
+  }
+}
+
+export async function restoreAudioFromOldSet({
+  audioPath,
+  trackNumber
+}: {
+  audioPath: string
+  trackNumber: number
+}): Promise<{ success: boolean }> {
+  // Create the oldset path by replacing .mp3 with .mp3oldset{trackNumber}
+  const oldsetPath = audioPath.replace(/\.mp3$/, `.mp3oldset${trackNumber}`)
+
+  try {
+    // First check if the oldset file exists
+    const exists = await checkAudioTrackExists({
+      audioPath,
+      trackNumber
+    });
+    
+    if (!exists) {
+      console.warn(`Audio track ${trackNumber} does not exist for ${audioPath}`);
+      return { success: false };
+    }
+    
+    // Restore by copying oldset to original
+    await r2Client.send(new CopyObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      CopySource: `${process.env.R2_BUCKET_NAME}/${oldsetPath}`,
+      Key: audioPath,
+    }))
+    
+    // Delete the oldset file after restoring it
+    // This ensures we only have the original file and one oldset file at any time
+    await r2Client.send(new DeleteObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: oldsetPath,
+    }))
+
+    return { success: true }
+  } catch (error) {
+    console.error(`Error restoring audio from oldset${trackNumber}:`, error)
+    throw new Error(getUserFriendlyError(error))
+  }
+}
+
+export async function checkAudioTrackExists({
+  audioPath,
+  trackNumber
+}: {
+  audioPath: string
+  trackNumber: number
+}): Promise<boolean> {
+  // Create the oldset path by replacing .mp3 with .mp3oldset{trackNumber}
+  const oldsetPath = audioPath.replace(/\.mp3$/, `.mp3oldset${trackNumber}`)
+
+  try {
+    // Check if the oldset file exists
+    await r2Client.send(new HeadObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: oldsetPath,
+    }))
+    return true
+  } catch {
+    // If the file doesn't exist, return false
+    return false
+  }
+}
+
+// New function to refresh project files without using Supabase
+export async function refreshProjectFiles({
+  userId,
+  projectId
+}: {
+  userId: string
+  projectId: string
+}): Promise<{
+  signedFiles: SignedFileResponse[]
+  status: ProjectStatus | null
+}> {
+  try {
+    // Get project status
+    const status = await getProjectStatus({
+      userId,
+      projectId
+    })
+    
+    // Get signed URLs for all files
+    const signedFiles = await getSignedImageUrls(userId, projectId)
+    
+    return {
+      signedFiles,
+      status
+    }
+  } catch (error) {
+    console.error('Error refreshing project files:', error)
     throw new Error(getUserFriendlyError(error))
   }
 }
