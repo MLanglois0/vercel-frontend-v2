@@ -180,6 +180,7 @@ export default function ProjectDetail() {
   const [processingNewImageSet, setProcessingNewImageSet] = useState<Set<number>>(new Set())
   const [processingItems, setProcessingItems] = useState<Set<number>>(new Set())
   const [isReplaceImagesInProgress, setIsReplaceImagesInProgress] = useState(false)
+  const [confirmReplaceItem, setConfirmReplaceItem] = useState<StoryboardItem | null>(null)
 
   const fetchProject = useCallback(async () => {
     try {
@@ -706,6 +707,22 @@ export default function ProjectDetail() {
 
   const handleNewImageSet = async (item: StoryboardItem) => {
     if (!item.image?.path || processingNewImageSet.has(item.number)) return
+    
+    const isRestoreAction = checkForJpgoldset(item.number)
+    
+    // If this is a replace action (not restore), show confirmation dialog
+    if (!isRestoreAction) {
+      setConfirmReplaceItem(item)
+      return
+    }
+    
+    // Otherwise, proceed with the restore action
+    await processImageAction(item)
+  }
+  
+  // New function to handle the actual image processing
+  const processImageAction = async (item: StoryboardItem) => {
+    if (!item.image?.path) return
     
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -1372,6 +1389,41 @@ export default function ProjectDetail() {
               </Button>
             </DialogFooter>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add the confirmation dialog */}
+      <Dialog open={confirmReplaceItem !== null} onOpenChange={(open) => !open && setConfirmReplaceItem(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Replace Images</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <p>
+              The Replace Images button will save a copy of the primary image, delete all of the thumbnails, 
+              and generate a new set of 4 images to view. The only file that can be recovered is the original 
+              primary image. Are you sure you want to proceed?
+            </p>
+          </div>
+          <DialogFooter className="flex justify-between sm:justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmReplaceItem(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                const item = confirmReplaceItem
+                setConfirmReplaceItem(null)
+                if (item) processImageAction(item)
+              }}
+            >
+              Proceed
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
