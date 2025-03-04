@@ -141,9 +141,13 @@ function getIntakeButtonState(status: string | undefined) {
   }
 }
 
-function getStoryboardButtonState(status: string | undefined) {
+function getStoryboardButtonState(status: string | undefined, hasVoiceSelected: boolean | null = null) {
   switch (status) {
     case "Ready to Process Storyboard":
+      // Only check for voice selection if the button would be enabled
+      if (hasVoiceSelected === false) {
+        return { enabled: false, label: "Voice Not Chosen" }
+      }
       return { enabled: true, label: "Generate Storyboard" }
     case "Processing Storyboard, Please Wait":
       return { enabled: false, label: "Processing Storyboard..." }
@@ -222,6 +226,9 @@ export default function ProjectDetail() {
   const [isVoiceConfirmOpen, setIsVoiceConfirmOpen] = useState(false)
   const [isUpdatingVoice, setIsUpdatingVoice] = useState(false)
 
+  // Add state to track if voice is selected
+  const [isVoiceSelected, setIsVoiceSelected] = useState<boolean | null>(null)
+
   const fetchProject = useCallback(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -257,7 +264,7 @@ export default function ProjectDetail() {
         
         console.log('Voice data loaded directly from R2:', voiceData)
         
-        if (voiceData?.voices && Array.isArray(voiceData.voices)) {
+        if (voiceData?.voices && Array.isArray(voiceData.voices) && voiceData.voices.length > 0) {
           console.log('Setting voices array:', voiceData.voices.length)
           setVoices(voiceData.voices)
           // Set default selected voice if available
@@ -271,22 +278,10 @@ export default function ProjectDetail() {
           setVoiceDataError(null)
         } else {
           console.log('No voice data found or invalid format')
-          // Set default voices for testing if no file is found
-          const defaultVoices = [
-            {
-              voice_id: "default1",
-              name: "Default Voice 1",
-              preview_url: "https://example.com/preview1.mp3"
-            },
-            {
-              voice_id: "default2",
-              name: "Default Voice 2",
-              preview_url: "https://example.com/preview2.mp3"
-            }
-          ]
-          console.log('Setting default voices for testing');
-          setVoices(defaultVoices);
-          setSelectedVoice(defaultVoices[0].voice_id);
+          // Don't set default voices anymore, just leave the dropdown empty
+          setVoices([])
+          setSelectedVoice("")
+          setVoiceDataError('No voices available. Please process the ebook first.')
         }
       } catch (error) {
         console.error('Error loading voice data:', error)
@@ -550,6 +545,8 @@ export default function ProjectDetail() {
           } else {
             console.error('Voice data file not found or empty after intake')
             setVoiceDataError('Voice data file not found after intake. Please try reprocessing the ebook.')
+            setVoices([])
+            setSelectedVoice("")
           }
         } catch (error) {
           console.error('Error checking for voice data:', error)
@@ -558,6 +555,51 @@ export default function ProjectDetail() {
       }
       
       checkForVoiceData()
+    }
+  }, [projectStatus?.Ebook_Prep_Status, project])
+
+  // Add a useEffect to refresh voice data when ebook processing completes
+  useEffect(() => {
+    // Check if ebook processing just completed and project exists
+    if (projectStatus?.Ebook_Prep_Status === "Ebook Processing Complete" && project) {
+      // Refresh voice data
+      const refreshVoiceData = async () => {
+        try {
+          setVoiceDataError(null)
+          const { data: { session } } = await supabase.auth.getSession()
+          if (!session) return
+          
+          const voiceData = await getVoiceDataFile({
+            userId: session.user.id,
+            projectId: project.id
+          })
+          
+          console.log('Refreshing voice data after ebook completion:', voiceData)
+          
+          if (voiceData?.voices && Array.isArray(voiceData.voices) && voiceData.voices.length > 0) {
+            setVoices(voiceData.voices)
+            // Set default selected voice if available
+            if (project.voice_id && voiceData.voices.some(v => v.voice_id === project.voice_id)) {
+              // If project has a saved voice_id and it exists in the available voices, use it
+              setSelectedVoice(project.voice_id)
+            } else {
+              // Otherwise use the first voice
+              setSelectedVoice(voiceData.voices[0].voice_id)
+            }
+            setVoiceDataError(null)
+          } else {
+            console.log('No voice data found after ebook completion')
+            setVoiceDataError('No voices available yet. Please wait a moment and refresh the page.')
+            
+            // Set a timer to try again in 5 seconds
+            setTimeout(() => refreshVoiceData(), 5000)
+          }
+        } catch (error) {
+          console.error('Error refreshing voice data:', error)
+        }
+      }
+      
+      refreshVoiceData()
     }
   }, [projectStatus?.Ebook_Prep_Status, project])
 
@@ -878,10 +920,11 @@ export default function ProjectDetail() {
       const authorName = project.author_name || "Mike Langlois"; // Default if not set
       const bookTitle = project.book_title || "Walker"; // Use project book_title or default
 
-      // Use the selected voice ID instead of hardcoded "Abe"
-      const voiceId = selectedVoice || "Abe"; // Default to "Abe" if no voice selected
+      // Get the selected voice name instead of ID
+      const selectedVoiceData = voices.find(voice => voice.voice_id === selectedVoice);
+      const voiceName = selectedVoiceData?.name || "Abe"; // Default to "Abe" if no voice selected or found
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceId}" -l 2 -si`
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 5 -si`
       await sendCommand(command)
       toast.success('Processing started')
     } catch (error) {
@@ -911,6 +954,7 @@ export default function ProjectDetail() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('No session')
       if (!project) throw new Error('Project not found')
+      if (!project.voice_id) throw new Error('Voice not selected')
 
       // Extract filename from epub_file_path
       const epubFilename = project.epub_file_path.split('/').pop()
@@ -937,8 +981,11 @@ export default function ProjectDetail() {
       // Use the author_name and book_title from the project
       const authorName = project.author_name || "Mike Langlois"; // Default if not set
       const bookTitle = project.book_title || "Walker"; // Use project book_title or default
+      
+      // Use the voice name from the project instead of the voice ID
+      const voiceName = project.voice_name || "Abe"; // Default to "Abe" if voice name not set
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "Abe" -l 2 -ss`
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 5 -ss`
       await sendCommand(command)
       toast.success('Generation started')
     } catch (error) {
@@ -978,8 +1025,11 @@ export default function ProjectDetail() {
       // Use the author_name and book_title from the project
       const authorName = project.author_name || "Mike Langlois"; // Default if not set
       const bookTitle = project.book_title || "Walker"; // Use project book_title or default
+      
+      // Use the voice name from the project instead of hardcoded "Abe"
+      const voiceName = project.voice_name || "Abe"; // Default to "Abe" if voice name not set
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "Abe" -l 2 -sb`
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 5 -sb`
       await sendCommand(command)
       toast.success('Generation started')
     } catch (error) {
@@ -1265,6 +1315,43 @@ export default function ProjectDetail() {
     }
   }
 
+  // Add a function to check if voice is selected
+  const checkVoiceSelection = useCallback(async () => {
+    if (!project) return
+    
+    // Only check if the storyboard status would enable the button
+    if (projectStatus?.Storyboard_Status === "Ready to Process Storyboard") {
+      // Check if voice_id is set in the project
+      if (project.voice_id) {
+        setIsVoiceSelected(true)
+      } else {
+        // If not in the local state, check the database
+        try {
+          const { data: { session } } = await supabase.auth.getSession()
+          if (!session) return
+          
+          const { data, error } = await supabase
+            .from('projects')
+            .select('voice_id')
+            .eq('id', project.id)
+            .single()
+          
+          if (error) throw error
+          
+          setIsVoiceSelected(!!data.voice_id)
+        } catch (error) {
+          console.error('Error checking voice selection:', error)
+          setIsVoiceSelected(false)
+        }
+      }
+    }
+  }, [project, projectStatus?.Storyboard_Status])
+
+  // Add useEffect to check voice selection when project status changes
+  useEffect(() => {
+    checkVoiceSelection()
+  }, [projectStatus, checkVoiceSelection])
+
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
 
@@ -1368,14 +1455,26 @@ export default function ProjectDetail() {
             <Card className="p-2 border-0 shadow-none">
               <div className="flex justify-between items-center mb-4">
                 <p className="text-3xl font-bold">Audiobook Preparation</p>
-                <Button 
-                  variant="outline"
-                  onClick={handleProcessEpub}
-                  disabled={!getIntakeButtonState(projectStatus?.Ebook_Prep_Status).enabled}
-                  className={getIntakeButtonState(projectStatus?.Ebook_Prep_Status).label === "Intake Complete" ? "bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200" : ""}
-                >
-                  {getIntakeButtonState(projectStatus?.Ebook_Prep_Status).label}
-                </Button>
+                <div className="flex flex-col gap-2">
+                  <Button 
+                    variant="outline"
+                    onClick={handleProcessEpub}
+                    disabled={!getIntakeButtonState(projectStatus?.Ebook_Prep_Status).enabled}
+                    className={getIntakeButtonState(projectStatus?.Ebook_Prep_Status).label === "Intake Complete" ? "bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200" : ""}
+                  >
+                    {getIntakeButtonState(projectStatus?.Ebook_Prep_Status).label}
+                  </Button>
+                  
+                  {/* Storyboard button moved from storyboard tab */}
+                  <Button 
+                    variant="outline"
+                    onClick={handleGenerateStoryboard}
+                    disabled={!getStoryboardButtonState(projectStatus?.Storyboard_Status, isVoiceSelected).enabled || projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
+                    className={getStoryboardButtonState(projectStatus?.Storyboard_Status, isVoiceSelected).label === "Storyboard Complete" ? "bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200" : ""}
+                  >
+                    {getStoryboardButtonState(projectStatus?.Storyboard_Status, isVoiceSelected).label}
+                  </Button>
+                </div>
               </div>
               
               <div className="space-y-4 max-w-2xl">
@@ -1426,8 +1525,8 @@ export default function ProjectDetail() {
                   </Button>
                 </div>
                 
-                {/* Voice Selection Section */}
-                <div className="space-y-4 border p-4 rounded-md">
+                {/* Voice Selection Section - Conditionally enabled */}
+                <div className={`space-y-4 border p-4 rounded-md ${projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" ? 'opacity-50' : ''}`}>
                   <h3 className="text-md font-medium">Voice Selection</h3>
                   <p className="text-sm text-gray-600">
                     Select a voice that will be used to create the storyboard files.
@@ -1443,6 +1542,7 @@ export default function ProjectDetail() {
                       <button
                         onClick={() => setIsVoiceConfirmOpen(true)}
                         className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700"
+                        disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
                       >
                         Change
                       </button>
@@ -1461,6 +1561,7 @@ export default function ProjectDetail() {
                         value={selectedVoice}
                         onChange={(e) => setSelectedVoice(e.target.value)}
                         className="w-full p-2 border rounded"
+                        disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
                       >
                         {voices.length === 0 ? (
                           <option value="">No voices available</option>
@@ -1476,7 +1577,7 @@ export default function ProjectDetail() {
                     
                     <button
                       onClick={playVoicePreview}
-                      disabled={!selectedVoice || voices.length === 0 || isPlayingPreview || !voices.find(v => v.voice_id === selectedVoice)?.preview_url}
+                      disabled={!selectedVoice || voices.length === 0 || isPlayingPreview || !voices.find(v => v.voice_id === selectedVoice)?.preview_url || projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
                       className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
                     >
                       {isPlayingPreview ? 'Playing...' : 'Play Preview'}
@@ -1486,7 +1587,7 @@ export default function ProjectDetail() {
                   </div>
                   
                   {/* Voice Labels Display */}
-                  {selectedVoice && voices.length > 0 && (
+                  {selectedVoice && voices.length > 0 && projectStatus?.Ebook_Prep_Status === "Ebook Processing Complete" && (
                     <div className="mt-4">
                       <h4 className="text-sm font-medium mb-2">Voice Characteristics</h4>
                       <div className="grid grid-cols-2 gap-3">
@@ -1518,14 +1619,24 @@ export default function ProjectDetail() {
                       <div className="mt-4">
                         <button
                           onClick={() => setIsVoiceConfirmOpen(true)}
-                          className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                          className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400"
+                          disabled={
+                            projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" || 
+                            projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait" ||
+                            projectStatus?.Storyboard_Status === "Storyboard Complete"
+                          }
                         >
-                          Select This Voice
+                          {projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait" || 
+                           projectStatus?.Storyboard_Status === "Storyboard Complete" 
+                            ? "Voice Selected" 
+                            : "Select This Voice"}
                         </button>
                       </div>
                     </div>
                   )}
                 </div>
+                
+                {/* Generate Storyboard Button removed - now at the top */}
               </div>
             </Card>
           </TabsContent>
@@ -1534,18 +1645,26 @@ export default function ProjectDetail() {
             <Card className="p-2 border-0 shadow-none">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-2xl font-semibold">Storyboard</h3>
+                {/* Audiobook button moved from audiobook tab */}
                 <Button 
                   variant="outline"
-                  onClick={handleGenerateStoryboard}
-                  disabled={!getStoryboardButtonState(projectStatus?.Storyboard_Status).enabled}
-                  className={getStoryboardButtonState(projectStatus?.Storyboard_Status).label === "Storyboard Complete" ? "bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200" : ""}
+                  onClick={handleGenerateAudiobook}
+                  disabled={!getAudiobookButtonState(projectStatus?.Audiobook_Status).enabled}
+                  className={getAudiobookButtonState(projectStatus?.Audiobook_Status).label === "Audiobook Complete" ? "bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200" : ""}
                 >
-                  {getStoryboardButtonState(projectStatus?.Storyboard_Status).label}
+                  {getAudiobookButtonState(projectStatus?.Audiobook_Status).label}
                 </Button>
               </div>
               {loading ? (
                 <div className="flex items-center justify-center min-h-[200px]">
                   <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent"></div>
+                </div>
+              ) : projectStatus?.Storyboard_Status !== "Storyboard Complete" ? (
+                <div className="flex items-center justify-center min-h-[400px]">
+                  <div className="text-center">
+                    <p className="text-xl font-medium text-gray-600">Storyboard Not Yet Available</p>
+                    <p className="text-sm text-gray-500 mt-2">The storyboard will appear here once it&apos;s generated.</p>
+                  </div>
                 </div>
               ) : items.length > 0 ? (
                 <div className="relative">
@@ -1779,14 +1898,7 @@ export default function ProjectDetail() {
             <Card className="p-2 border-0 shadow-none">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-2xl font-semibold">Audiobook</h3>
-                <Button 
-                  variant="outline"
-                  onClick={handleGenerateAudiobook}
-                  disabled={!getAudiobookButtonState(projectStatus?.Audiobook_Status).enabled}
-                  className={getAudiobookButtonState(projectStatus?.Audiobook_Status).label === "Audiobook Complete" ? "bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200" : ""}
-                >
-                  {getAudiobookButtonState(projectStatus?.Audiobook_Status).label}
-                </Button>
+                {/* Audiobook button removed as requested */}
               </div>
               {videos.length > 0 ? (
                 <div className="relative">
