@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ChevronLeft, ChevronRight, FileText } from "lucide-react"
+import { ChevronLeft, ChevronRight, FileText, Play, Volume2 } from "lucide-react"
 import { toast } from 'sonner'
 import { 
   getSignedImageUrls, 
@@ -1907,13 +1907,76 @@ export default function ProjectDetail() {
                     className="flex gap-4 overflow-x-auto pb-4 scroll-smooth"
                   >
                     {videos.map((video, index) => (
-                      <Card key={index} className="flex-shrink-0 w-[270px]">
+                      <Card key={index} className="flex-shrink-0 w-[341px]">
                         <CardContent className="p-2 space-y-2">
-                          <div className="relative w-full h-[480px]">
-                            <video controls className="w-full h-full object-cover rounded">
-                              <source src={video.url} type="video/mp4" />
-                              Your browser does not support the video tag.
-                            </video>
+                          <div className="flex flex-col space-y-2">
+                            <div className="relative w-full h-[597px] overflow-hidden rounded">
+                              <video 
+                                className="w-full h-full object-cover" 
+                                controlsList="nodownload" 
+                                disablePictureInPicture
+                                id={`video-${index}`}
+                              >
+                                <source src={video.url} type="video/mp4" />
+                                Your browser does not support the video tag.
+                              </video>
+                            </div>
+                            <div className="flex justify-center">
+                              <div className="flex items-center space-x-2 bg-gray-100 p-2 rounded-md w-full">
+                                <Button 
+                                  variant="outline" 
+                                  size="icon" 
+                                  className="h-8 w-8"
+                                  onClick={() => {
+                                    const video = document.getElementById(`video-${index}`) as HTMLVideoElement;
+                                    if (video.paused) {
+                                      video.play();
+                                    } else {
+                                      video.pause();
+                                    }
+                                  }}
+                                >
+                                  <Play className="h-4 w-4" />
+                                </Button>
+                                <div className="flex-1">
+                                  <input 
+                                    type="range" 
+                                    className="w-full" 
+                                    min="0" 
+                                    max="100" 
+                                    defaultValue="0"
+                                    onChange={(e) => {
+                                      const video = document.getElementById(`video-${index}`) as HTMLVideoElement;
+                                      if (video) {
+                                        const time = (parseInt(e.target.value) / 100) * video.duration;
+                                        video.currentTime = time;
+                                      }
+                                    }}
+                                    onMouseDown={() => {
+                                      const video = document.getElementById(`video-${index}`) as HTMLVideoElement;
+                                      if (video) video.pause();
+                                    }}
+                                    onMouseUp={() => {
+                                      const video = document.getElementById(`video-${index}`) as HTMLVideoElement;
+                                      if (video && !video.paused) video.play();
+                                    }}
+                                  />
+                                </div>
+                                <Button 
+                                  variant="outline" 
+                                  size="icon" 
+                                  className="h-8 w-8"
+                                  onClick={() => {
+                                    const video = document.getElementById(`video-${index}`) as HTMLVideoElement;
+                                    if (video) {
+                                      video.muted = !video.muted;
+                                    }
+                                  }}
+                                >
+                                  <Volume2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
                           </div>
                         </CardContent>
                       </Card>
@@ -1925,7 +1988,7 @@ export default function ProjectDetail() {
                         variant="outline"
                         size="icon"
                         className="absolute left-0 top-1/2 transform -translate-y-1/2 bg-background"
-                        onClick={() => scrollContainerRef.current?.scrollBy({ left: -270, behavior: 'smooth' })}
+                        onClick={() => scrollContainerRef.current?.scrollBy({ left: -341, behavior: 'smooth' })}
                       >
                         <ChevronLeft className="h-4 w-4" />
                       </Button>
@@ -1933,7 +1996,7 @@ export default function ProjectDetail() {
                         variant="outline"
                         size="icon"
                         className="absolute right-0 top-1/2 transform -translate-y-1/2 bg-background"
-                        onClick={() => scrollContainerRef.current?.scrollBy({ left: 270, behavior: 'smooth' })}
+                        onClick={() => scrollContainerRef.current?.scrollBy({ left: 341, behavior: 'smooth' })}
                       >
                         <ChevronRight className="h-4 w-4" />
                       </Button>
