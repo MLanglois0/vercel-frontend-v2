@@ -10,7 +10,7 @@ export async function sendCommand(command: string): Promise<CommandResponse> {
   try {
     // console.log('Starting command:', command)
     
-    const response = await fetch('http://3.95.153.86:5000/run-command', {
+    const response = await fetch('http://18.208.161.54:5000/run-command', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

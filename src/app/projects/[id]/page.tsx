@@ -22,7 +22,8 @@ import {
   saveAudioToOldSet,
   restoreAudioFromOldSet,
   checkAudioTrackExists,
-  getVoiceDataFile
+  getVoiceDataFile,
+  getNerDataFile
 } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
@@ -283,8 +284,26 @@ export default function ProjectDetail() {
           setSelectedVoice("")
           setVoiceDataError('No voices available. Please process the ebook first.')
         }
-      } catch (error) {
-        console.error('Error loading voice data:', error)
+        
+        // Load NER data if it exists
+        try {
+          const nerData = await getNerDataFile({
+            userId: session.user.id,
+            projectId: project.id
+          })
+          
+          console.log('NER data loaded from R2:', nerData)
+          
+          if (nerData) {
+            console.log('NER data:', nerData)
+          } else {
+            console.log('No NER data found or invalid format')
+          }
+        } catch (nerError) {
+          console.error('Error loading NER data:', nerError)
+        }
+      } catch (voiceError) {
+        console.error('Error loading voice data:', voiceError)
         setVoiceDataError('Failed to load voice data. Please try again later.')
       }
 

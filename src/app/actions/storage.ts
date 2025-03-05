@@ -49,6 +49,15 @@ interface VoiceData {
   }>
 }
 
+// Define interface for NER data
+interface NerData {
+  entities: Array<{
+    name: string;
+    HTP: boolean; // Hard To Pronounce flag
+    phoneme?: string; // IPA phoneme pronunciation
+  }>;
+}
+
 export async function listProjectFiles(userId: string, projectId: string) {
   try {
     // console.log(`Listing files for user ${userId} and project ${projectId}`)
@@ -758,6 +767,71 @@ export async function getVoiceDataFile({
     return null
   } catch (error) {
     console.error('Error fetching voice data file:', error)
+    throw error
+  }
+}
+
+// Add a new function to get NER data file
+export async function getNerDataFile({
+  userId,
+  projectId
+}: {
+  userId: string
+  projectId: string
+}): Promise<NerData | null> {
+  try {
+    // First, list all files in the temp directory to find the correct NER file name pattern
+    const listCommand = new ListObjectsV2Command({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Prefix: `${userId}/${projectId}/temp/`,
+      Delimiter: '/'
+    })
+
+    const { Contents: files } = await r2Client.send(listCommand)
+    
+    if (!files || files.length === 0) {
+      console.log(`No files found in temp directory for project ${projectId}`)
+      return null
+    }
+
+    // Look for a file that ends with _ner.json (language-agnostic)
+    const nerFile = files.find(file => 
+      file.Key && file.Key.endsWith('_ner.json')
+    )
+
+    if (!nerFile || !nerFile.Key) {
+      console.log(`No NER file found in temp directory for project ${projectId}`)
+      return null
+    }
+
+    // Use the found NER file path
+    const nerDataFilePath = nerFile.Key
+    console.log(`Found NER file: ${nerDataFilePath}`)
+    
+    const getCommand = new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: nerDataFilePath
+    })
+
+    try {
+      const response = await r2Client.send(getCommand)
+      const nerDataContent = await response.Body?.transformToString()
+      
+      if (nerDataContent) {
+        return JSON.parse(nerDataContent) as NerData
+      }
+    } catch (error) {
+      // If file doesn't exist, return null
+      if (error instanceof Error && 'name' in error && error.name === 'NoSuchKey') {
+        console.log(`NER data file not found at ${nerDataFilePath}`)
+        return null
+      }
+      throw error
+    }
+    
+    return null
+  } catch (error) {
+    console.error('Error fetching NER data file:', error)
     throw error
   }
 }
