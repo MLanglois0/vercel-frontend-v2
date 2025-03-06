@@ -278,6 +278,8 @@ export default function ProjectDetail() {
   // Add state for GPT IPA pronunciation
   const [gptIpaPronunciation, setGptIpaPronunciation] = useState<string | null>(null)
   const [isLoadingIpa, setIsLoadingIpa] = useState(false)
+  const [isConfirmedForAudiobook, setIsConfirmedForAudiobook] = useState(false)
+  const [isUseIpaButtonDisabled, setIsUseIpaButtonDisabled] = useState(true)
 
   const fetchProject = useCallback(async () => {
     try {
@@ -1043,9 +1045,6 @@ export default function ProjectDetail() {
         return
       }
       
-      // Add a small pause before the name using SSML
-      const textWithPause = `<break time="0.2s"/>${name}`
-      
       // Call the ElevenLabs API
       const response = await fetch('/api/elevenlabs', {
         method: 'POST',
@@ -1053,7 +1052,7 @@ export default function ProjectDetail() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          text: textWithPause,
+          text: name,
           voiceId: voiceId,
         }),
       })
@@ -1488,6 +1487,9 @@ export default function ProjectDetail() {
     try {
       setIsLoadingIpa(true)
       setGptIpaPronunciation(null)
+      // Reset confirmation status and enable the Use this IPA button
+      setIsConfirmedForAudiobook(false)
+      setIsUseIpaButtonDisabled(false)
       
       const response = await fetch('/api/gpt-pronunciation', {
         method: 'POST',
@@ -1508,6 +1510,18 @@ export default function ProjectDetail() {
       toast.error('Failed to get IPA pronunciation')
     } finally {
       setIsLoadingIpa(false)
+    }
+  }
+
+  // Add function to confirm IPA for audiobook
+  const confirmIpaForAudiobook = () => {
+    if (gptIpaPronunciation) {
+      setIsConfirmedForAudiobook(true)
+      // Disable the Use this IPA button after it's pressed
+      setIsUseIpaButtonDisabled(true)
+      toast.success('IPA pronunciation confirmed for audiobook')
+      // Here you would typically save this to your database
+      // This is a placeholder for that functionality
     }
   }
 
@@ -1934,9 +1948,9 @@ export default function ProjectDetail() {
                         </div>
                         
                         {/* Display pronunciation details if an entity is selected - MOVED HERE */}
-                        {selectedNameEntity && (
-                          <div className="mt-4 p-3 bg-blue-50 rounded-md">
-                            {(() => {
+                        <div className="mt-4 p-3 bg-blue-50 rounded-md">
+                          {selectedNameEntity ? (
+                            (() => {
                               // Parse the selected value to get category and name
                               const [category, ...nameParts] = selectedNameEntity.split('-')
                               
@@ -1991,63 +2005,93 @@ export default function ProjectDetail() {
                               }
                               
                               return <div>Entity details not found</div>
-                            })()}
-                          </div>
-                        )}
+                            })()
+                          ) : (
+                            <div className="space-y-2">
+                              <div>
+                                <span className="font-medium">Name: </span>
+                              </div>
+                              <div>
+                                <span className="font-medium">IPA Pronunciation: </span>
+                              </div>
+                              <div>
+                                <span className="font-medium">Hard to Pronounce: </span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                         
-                        {/* Add test name input and hear button */}
-                        <div className="mt-4 flex flex-col sm:flex-row gap-2 items-start sm:items-center">
-                          <div className="w-full sm:w-64">
-                            <input
-                              type="text"
-                              placeholder="Enter a name to hear"
-                              id="test-name-input"
-                              className="w-full p-2 border rounded"
-                            />
-                          </div>
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => {
-                                const nameInput = document.getElementById('test-name-input') as HTMLInputElement
-                                if (nameInput && nameInput.value.trim()) {
-                                  playNameAudio(nameInput.value.trim())
-                                } else {
-                                  toast.error('Please enter a name')
-                                }
-                              }}
-                              disabled={isPlayingNameAudio || !selectedVoice}
-                              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
-                            >
-                              {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
-                            </button>
-                            <button
-                              onClick={() => {
-                                const nameInput = document.getElementById('test-name-input') as HTMLInputElement
-                                if (nameInput && nameInput.value.trim()) {
-                                  getIpaPronunciation(nameInput.value.trim())
-                                } else {
-                                  toast.error('Please enter a name')
-                                }
-                              }}
-                              disabled={isLoadingIpa}
-                              className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-400"
-                            >
-                              {isLoadingIpa ? 'Loading...' : 'Get IPA'}
-                            </button>
+                        {/* Add Corrected Pronunciation section */}
+                        <div className="mt-6">
+                          <h4 className="text-sm font-medium mb-2">Corrected Pronunciation</h4>
+                          <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+                            <div className="w-full sm:w-64">
+                              <input
+                                type="text"
+                                placeholder="Enter a phonetic spelling"
+                                id="test-name-input"
+                                className="w-full p-2 border rounded"
+                              />
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  const nameInput = document.getElementById('test-name-input') as HTMLInputElement
+                                  if (nameInput && nameInput.value.trim()) {
+                                    playNameAudio(nameInput.value.trim())
+                                  } else {
+                                    toast.error('Please enter a name')
+                                  }
+                                }}
+                                disabled={isPlayingNameAudio || !selectedVoice}
+                                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
+                              >
+                                {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  const nameInput = document.getElementById('test-name-input') as HTMLInputElement
+                                  if (nameInput && nameInput.value.trim()) {
+                                    getIpaPronunciation(nameInput.value.trim())
+                                  } else {
+                                    toast.error('Please enter a name')
+                                  }
+                                }}
+                                disabled={isLoadingIpa}
+                                className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-400"
+                              >
+                                {isLoadingIpa ? 'Loading...' : 'Get IPA'}
+                              </button>
+                              <button
+                                onClick={confirmIpaForAudiobook}
+                                disabled={!gptIpaPronunciation || isUseIpaButtonDisabled}
+                                className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400"
+                              >
+                                Use this IPA
+                              </button>
+                            </div>
                           </div>
                         </div>
                         
-                        {/* Display GPT IPA pronunciation if available */}
-                        {gptIpaPronunciation && (
-                          <div className="mt-4 p-3 bg-purple-50 rounded-md">
-                            <div className="space-y-2">
-                              <div>
-                                <span className="font-medium">IPA Pronunciation: </span>
+                        {/* Display GPT IPA pronunciation - always visible */}
+                        <div className="mt-4 p-3 bg-purple-50 rounded-md">
+                          <div className="space-y-2">
+                            <div>
+                              <span className="font-medium">IPA Pronunciation: </span>
+                              {gptIpaPronunciation ? (
                                 <code className="bg-gray-100 px-1 py-0.5 rounded">{gptIpaPronunciation}</code>
-                              </div>
+                              ) : (
+                                <span className="text-gray-500">No pronunciation generated yet</span>
+                              )}
+                            </div>
+                            <div>
+                              <span className="font-medium">Confirmed Pronunciation for Audiobook: </span>
+                              <span className={isConfirmedForAudiobook ? "text-green-600" : "text-gray-500"}>
+                                {isConfirmedForAudiobook ? "Yes" : "No"}
+                              </span>
                             </div>
                           </div>
-                        )}
+                        </div>
                         
                         {/* Audio element for name playback */}
                         <audio ref={nameAudioRef} className="hidden" controls />
