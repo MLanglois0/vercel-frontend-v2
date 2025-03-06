@@ -257,6 +257,10 @@ export default function ProjectDetail() {
   const [isPlayingPreview, setIsPlayingPreview] = useState(false)
   const audioRef = useRef<HTMLAudioElement>(null)
 
+  // Add state for name audio playback
+  const [isPlayingNameAudio, setIsPlayingNameAudio] = useState(false)
+  const nameAudioRef = useRef<HTMLAudioElement>(null)
+
   // Add NER data state
   const [nerData, setNerData] = useState<NerData | null>(null)
   const [selectedNameEntity, setSelectedNameEntity] = useState<string>("")
@@ -1019,6 +1023,57 @@ export default function ProjectDetail() {
     }
   }
 
+  // Add function to play name audio using ElevenLabs API
+  const playNameAudio = async (name: string) => {
+    if (!nameAudioRef.current || isPlayingNameAudio) return
+    
+    try {
+      setIsPlayingNameAudio(true)
+      
+      // Always use the currently selected voice from the dropdown
+      const voiceId = selectedVoice
+      
+      if (!voiceId) {
+        toast.error('Please select a voice first')
+        setIsPlayingNameAudio(false)
+        return
+      }
+      
+      // Add a small pause before the name using SSML
+      const textWithPause = `<break time="0.2s"/>${name}`
+      
+      // Call the ElevenLabs API
+      const response = await fetch('/api/elevenlabs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text: textWithPause,
+          voiceId: voiceId,
+        }),
+      })
+      
+      if (!response.ok) {
+        throw new Error('Failed to generate speech')
+      }
+      
+      const data = await response.json()
+      
+      // Play the audio
+      nameAudioRef.current.src = `data:audio/mpeg;base64,${data.audio}`
+      nameAudioRef.current.play()
+      
+      nameAudioRef.current.onended = () => {
+        setIsPlayingNameAudio(false)
+      }
+    } catch (error) {
+      console.error('Error playing name audio:', error)
+      toast.error('Failed to play name audio')
+      setIsPlayingNameAudio(false)
+    }
+  }
+
   const handleGenerateStoryboard = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -1721,82 +1776,157 @@ export default function ProjectDetail() {
                     
                     {nerData ? (
                       <>
-                        <div className="w-full sm:w-64">
-                          <select
-                            value={selectedNameEntity}
-                            onChange={(e) => setSelectedNameEntity(e.target.value)}
-                            className="w-full p-2 border rounded"
-                            disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
+                        <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+                          <div className="w-full sm:w-64">
+                            <select
+                              value={selectedNameEntity}
+                              onChange={(e) => setSelectedNameEntity(e.target.value)}
+                              className="w-full p-2 border rounded"
+                              disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
+                            >
+                              <option value="">Select a name or entity</option>
+                              
+                              {/* Person - Common */}
+                              {nerData.book_summary?.person_entities_common?.length > 0 && (
+                                <optgroup label="Person - Common">
+                                  {nerData.book_summary.person_entities_common.map((entity: EntityItem) => (
+                                    <option key={`person-common-${entity.name}`} value={`person-common-${entity.name}`}>
+                                      {entity.name}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              
+                              {/* Person - Unusual */}
+                              {nerData.book_summary?.person_entities_unusual?.length > 0 && (
+                                <optgroup label="Person - Unusual">
+                                  {nerData.book_summary.person_entities_unusual.map((entity: EntityItem) => (
+                                    <option key={`person-unusual-${entity.name}`} value={`person-unusual-${entity.name}`}>
+                                      {entity.name}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              
+                              {/* Location - Common */}
+                              {nerData.book_summary?.location_entities_common?.length > 0 && (
+                                <optgroup label="Location - Common">
+                                  {nerData.book_summary.location_entities_common.map((entity: EntityItem) => (
+                                    <option key={`location-common-${entity.name}`} value={`location-common-${entity.name}`}>
+                                      {entity.name}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              
+                              {/* Location - Unusual */}
+                              {nerData.book_summary?.location_entities_unusual?.length > 0 && (
+                                <optgroup label="Location - Unusual">
+                                  {nerData.book_summary.location_entities_unusual.map((entity: EntityItem) => (
+                                    <option key={`location-unusual-${entity.name}`} value={`location-unusual-${entity.name}`}>
+                                      {entity.name}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              
+                              {/* Organization - Common */}
+                              {nerData.book_summary?.organization_entities_common?.length > 0 && (
+                                <optgroup label="Organization - Common">
+                                  {nerData.book_summary.organization_entities_common.map((entity: EntityItem) => (
+                                    <option key={`org-common-${entity.name}`} value={`org-common-${entity.name}`}>
+                                      {entity.name}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              
+                              {/* Organization - Unusual */}
+                              {nerData.book_summary?.organization_entities_unusual?.length > 0 && (
+                                <optgroup label="Organization - Unusual">
+                                  {nerData.book_summary.organization_entities_unusual.map((entity: EntityItem) => (
+                                    <option key={`org-unusual-${entity.name}`} value={`org-unusual-${entity.name}`}>
+                                      {entity.name}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
+                            </select>
+                          </div>
+                          
+                          {/* Add Hear Name button next to dropdown */}
+                          <button
+                            onClick={() => {
+                              // Parse the selected value to get category and name
+                              const [category, ...nameParts] = selectedNameEntity.split('-')
+                              // Find the selected entity
+                              let selectedEntity: EntityItem | null = null
+                              
+                              if (category === 'person' && nameParts[0] === 'common') {
+                                selectedEntity = nerData.book_summary.person_entities_common.find(
+                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                ) || null
+                              } else if (category === 'person' && nameParts[0] === 'unusual') {
+                                selectedEntity = nerData.book_summary.person_entities_unusual.find(
+                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                ) || null
+                              } else if (category === 'location' && nameParts[0] === 'common') {
+                                selectedEntity = nerData.book_summary.location_entities_common.find(
+                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                ) || null
+                              } else if (category === 'location' && nameParts[0] === 'unusual') {
+                                selectedEntity = nerData.book_summary.location_entities_unusual.find(
+                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                ) || null
+                              } else if (category === 'org' && nameParts[0] === 'common') {
+                                selectedEntity = nerData.book_summary.organization_entities_common.find(
+                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                ) || null
+                              } else if (category === 'org' && nameParts[0] === 'unusual') {
+                                selectedEntity = nerData.book_summary.organization_entities_unusual.find(
+                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                ) || null
+                              }
+                              
+                              if (selectedEntity) {
+                                playNameAudio(selectedEntity.name)
+                              }
+                            }}
+                            disabled={isPlayingNameAudio || !selectedNameEntity || !selectedVoice}
+                            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
                           >
-                            <option value="">Select a name or entity</option>
-                            
-                            {/* Person - Common */}
-                            {nerData.book_summary?.person_entities_common?.length > 0 && (
-                              <optgroup label="Person - Common">
-                                {nerData.book_summary.person_entities_common.map((entity: EntityItem) => (
-                                  <option key={`person-common-${entity.name}`} value={`person-common-${entity.name}`}>
-                                    {entity.name}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                            
-                            {/* Person - Unusual */}
-                            {nerData.book_summary?.person_entities_unusual?.length > 0 && (
-                              <optgroup label="Person - Unusual">
-                                {nerData.book_summary.person_entities_unusual.map((entity: EntityItem) => (
-                                  <option key={`person-unusual-${entity.name}`} value={`person-unusual-${entity.name}`}>
-                                    {entity.name}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                            
-                            {/* Location - Common */}
-                            {nerData.book_summary?.location_entities_common?.length > 0 && (
-                              <optgroup label="Location - Common">
-                                {nerData.book_summary.location_entities_common.map((entity: EntityItem) => (
-                                  <option key={`location-common-${entity.name}`} value={`location-common-${entity.name}`}>
-                                    {entity.name}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                            
-                            {/* Location - Unusual */}
-                            {nerData.book_summary?.location_entities_unusual?.length > 0 && (
-                              <optgroup label="Location - Unusual">
-                                {nerData.book_summary.location_entities_unusual.map((entity: EntityItem) => (
-                                  <option key={`location-unusual-${entity.name}`} value={`location-unusual-${entity.name}`}>
-                                    {entity.name}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                            
-                            {/* Organization - Common */}
-                            {nerData.book_summary?.organization_entities_common?.length > 0 && (
-                              <optgroup label="Organization - Common">
-                                {nerData.book_summary.organization_entities_common.map((entity: EntityItem) => (
-                                  <option key={`org-common-${entity.name}`} value={`org-common-${entity.name}`}>
-                                    {entity.name}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                            
-                            {/* Organization - Unusual */}
-                            {nerData.book_summary?.organization_entities_unusual?.length > 0 && (
-                              <optgroup label="Organization - Unusual">
-                                {nerData.book_summary.organization_entities_unusual.map((entity: EntityItem) => (
-                                  <option key={`org-unusual-${entity.name}`} value={`org-unusual-${entity.name}`}>
-                                    {entity.name}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                          </select>
+                            {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
+                          </button>
                         </div>
+                        
+                        {/* Add test name input and hear button */}
+                        <div className="mt-4 flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+                          <div className="w-full sm:w-64">
+                            <input
+                              type="text"
+                              placeholder="Enter a name to hear"
+                              id="test-name-input"
+                              className="w-full p-2 border rounded"
+                            />
+                          </div>
+                          <button
+                            onClick={() => {
+                              const nameInput = document.getElementById('test-name-input') as HTMLInputElement
+                              if (nameInput && nameInput.value.trim()) {
+                                playNameAudio(nameInput.value.trim())
+                              } else {
+                                toast.error('Please enter a name')
+                              }
+                            }}
+                            disabled={isPlayingNameAudio || !selectedVoice}
+                            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
+                          >
+                            {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
+                          </button>
+                        </div>
+                        
+                        {/* Audio element for name playback */}
+                        <audio ref={nameAudioRef} className="hidden" controls />
                         
                         {/* Display pronunciation details if an entity is selected */}
                         {selectedNameEntity && (
