@@ -1899,42 +1899,12 @@ export default function ProjectDetail() {
                           </button>
                         </div>
                         
-                        {/* Add test name input and hear button */}
-                        <div className="mt-4 flex flex-col sm:flex-row gap-2 items-start sm:items-center">
-                          <div className="w-full sm:w-64">
-                            <input
-                              type="text"
-                              placeholder="Enter a name to hear"
-                              id="test-name-input"
-                              className="w-full p-2 border rounded"
-                            />
-                          </div>
-                          <button
-                            onClick={() => {
-                              const nameInput = document.getElementById('test-name-input') as HTMLInputElement
-                              if (nameInput && nameInput.value.trim()) {
-                                playNameAudio(nameInput.value.trim())
-                              } else {
-                                toast.error('Please enter a name')
-                              }
-                            }}
-                            disabled={isPlayingNameAudio || !selectedVoice}
-                            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
-                          >
-                            {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
-                          </button>
-                        </div>
-                        
-                        {/* Audio element for name playback */}
-                        <audio ref={nameAudioRef} className="hidden" controls />
-                        
-                        {/* Display pronunciation details if an entity is selected */}
+                        {/* Display pronunciation details if an entity is selected - MOVED HERE */}
                         {selectedNameEntity && (
                           <div className="mt-4 p-3 bg-blue-50 rounded-md">
                             {(() => {
                               // Parse the selected value to get category and name
                               const [category, ...nameParts] = selectedNameEntity.split('-')
-                              // Remove the unused variable
                               
                               // Find the selected entity
                               let selectedEntity: EntityItem | null = null
@@ -1990,6 +1960,37 @@ export default function ProjectDetail() {
                             })()}
                           </div>
                         )}
+                        
+                        {/* Add test name input and hear button */}
+                        <div className="mt-4 flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+                          <div className="w-full sm:w-64">
+                            <input
+                              type="text"
+                              placeholder="Enter a name to hear"
+                              id="test-name-input"
+                              className="w-full p-2 border rounded"
+                            />
+                          </div>
+                          <button
+                            onClick={() => {
+                              const nameInput = document.getElementById('test-name-input') as HTMLInputElement
+                              if (nameInput && nameInput.value.trim()) {
+                                playNameAudio(nameInput.value.trim())
+                              } else {
+                                toast.error('Please enter a name')
+                              }
+                            }}
+                            disabled={isPlayingNameAudio || !selectedVoice}
+                            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
+                          >
+                            {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
+                          </button>
+                        </div>
+                        
+                        {/* Audio element for name playback */}
+                        <audio ref={nameAudioRef} className="hidden" controls />
+                        
+                        {/* Removed the pronunciation details box from here as it's now placed above */}
                       </>
                     ) : (
                       <div className="p-3 bg-yellow-50 text-yellow-800 rounded-md">
