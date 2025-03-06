@@ -101,6 +101,43 @@ interface ProjectStatus {
   Audiobook_Status: string;
 }
 
+// Add interfaces for NER data
+interface EntityItem {
+  name: string;
+  IPA: string;
+  HTP: boolean;
+}
+
+interface NerDataSummary {
+  total_chapters: number;
+  person_count: number;
+  location_count: number;
+  organization_count: number;
+  person_entities_common: EntityItem[];
+  person_entities_unusual: EntityItem[];
+  location_entities_common: EntityItem[];
+  location_entities_unusual: EntityItem[];
+  organization_entities_common: EntityItem[];
+  organization_entities_unusual: EntityItem[];
+}
+
+// Update the NerData interface to match the actual structure
+interface NerData {
+  book_summary: NerDataSummary;
+  chapters: string[];
+}
+
+// Define the interface for the data returned by getNerDataFile
+interface NerDataFromApi {
+  entities?: Array<{
+    name: string;
+    HTP: boolean;
+    phoneme?: string;
+  }>;
+  book_summary?: NerDataSummary;
+  chapters?: string[];
+}
+
 // Helper functions for button states
 function getInitialTab(status: ProjectStatus | null) {
   if (!status) return 'intake'
@@ -220,6 +257,10 @@ export default function ProjectDetail() {
   const [isPlayingPreview, setIsPlayingPreview] = useState(false)
   const audioRef = useRef<HTMLAudioElement>(null)
 
+  // Add NER data state
+  const [nerData, setNerData] = useState<NerData | null>(null)
+  const [selectedNameEntity, setSelectedNameEntity] = useState<string>("")
+
   // Add error state for voice data
   const [voiceDataError, setVoiceDataError] = useState<string | null>(null)
 
@@ -296,6 +337,16 @@ export default function ProjectDetail() {
           
           if (nerData) {
             console.log('NER data:', nerData)
+            // Cast to the correct type and check if it has the expected structure
+            const typedNerData = nerData as unknown as NerDataFromApi;
+            if (typedNerData.book_summary) {
+              setNerData({
+                book_summary: typedNerData.book_summary,
+                chapters: typedNerData.chapters || []
+              });
+            } else {
+              console.log('NER data does not have the expected structure');
+            }
           } else {
             console.log('No NER data found or invalid format')
           }
@@ -943,7 +994,7 @@ export default function ProjectDetail() {
       const selectedVoiceData = voices.find(voice => voice.voice_id === selectedVoice);
       const voiceName = selectedVoiceData?.name || "Abe"; // Default to "Abe" if no voice selected or found
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 5 -si`
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 2 -si`
       await sendCommand(command)
       toast.success('Processing started')
     } catch (error) {
@@ -1004,7 +1055,7 @@ export default function ProjectDetail() {
       // Use the voice name from the project instead of the voice ID
       const voiceName = project.voice_name || "Abe"; // Default to "Abe" if voice name not set
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 5 -ss`
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 2 -ss`
       await sendCommand(command)
       toast.success('Generation started')
     } catch (error) {
@@ -1048,7 +1099,7 @@ export default function ProjectDetail() {
       // Use the voice name from the project instead of hardcoded "Abe"
       const voiceName = project.voice_name || "Abe"; // Default to "Abe" if voice name not set
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 5 -sb`
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 2 -sb`
       await sendCommand(command)
       toast.success('Generation started')
     } catch (error) {
@@ -1472,9 +1523,9 @@ export default function ProjectDetail() {
         <div className="mt-0 bg-white rounded-lg p-3 shadow-sm">
           <TabsContent value="intake">
             <Card className="p-2 border-0 shadow-none">
-              <div className="flex justify-between items-center mb-4">
-                <p className="text-3xl font-bold">Audiobook Preparation</p>
-                <div className="flex flex-col gap-2">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold">Audiobook Preparation</h2>
+                <div className="flex gap-3">
                   <Button 
                     variant="outline"
                     onClick={handleProcessEpub}
@@ -1496,166 +1547,327 @@ export default function ProjectDetail() {
                 </div>
               </div>
               
-              <div className="space-y-4 max-w-2xl">
-                <p className="text-sm text-gray-600">
-                  These values will be used when generating the audiobook. They can be changed at any time before the audiobook is created.
-                </p>
-                
-                {/* Book and Author Information Section */}
-                <div className="space-y-4 border p-4 rounded-md">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Book Title</label>
-                    <div className="flex gap-2">
-                      <Input
-                        value={project?.book_title || ''}
-                        readOnly
-                        className="bg-gray-50"
-                      />
-                    </div>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Author Name</label>
-                    <div className="flex gap-2">
-                      <Input
-                        value={project?.author_name || ''}
-                        readOnly
-                        className="bg-gray-50"
-                      />
-                    </div>
-                  </div>
-                  
-                  <Button 
-                    variant="outline" 
-                    onClick={() => {
-                      // Populate the form with current project data
-                      if (project) {
-                        setEditFormData({
-                          project_name: project.project_name,
-                          book_title: project.book_title,
-                          author_name: project.author_name,
-                          description: project.description
-                        });
-                      }
-                      setIsEditDialogOpen(true);
-                    }}
-                  >
-                    Edit Information
-                  </Button>
-                </div>
-                
-                {/* Voice Selection Section - Conditionally enabled */}
-                <div className={`space-y-4 border p-4 rounded-md ${projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" ? 'opacity-50' : ''}`}>
-                  <h3 className="text-md font-medium">Voice Selection</h3>
-                  <p className="text-sm text-gray-600">
-                    Select a voice that will be used to create the storyboard files.
-                  </p>
-                  
-                  {/* Show currently selected voice if one is saved */}
-                  {project?.voice_name && project?.voice_id && (
-                    <div className="mb-4 p-3 bg-green-50 text-green-800 rounded-md flex items-center justify-between">
-                      <div>
-                        <span className="font-medium">Currently selected voice: </span>
-                        {project.voice_name}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Left Column */}
+                <div className="space-y-6">
+                  {/* Book and Author Information Section */}
+                  <div className="space-y-4 border p-4 rounded-md">
+                    <h3 className="text-md font-medium">Audiobook Label Information</h3>
+                    <p className="text-sm text-gray-600">
+                      These values will be used when generating the audiobook. They can be changed at any time before the audiobook is created.
+                    </p>
+                    
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Book Title</label>
+                      <div className="flex gap-2">
+                        <Input
+                          value={project?.book_title || ''}
+                          readOnly
+                          className="bg-gray-50"
+                        />
                       </div>
-                      <button
-                        onClick={() => setIsVoiceConfirmOpen(true)}
-                        className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700"
-                        disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
-                      >
-                        Change
-                      </button>
-                    </div>
-                  )}
-                  
-                  {voiceDataError && (
-                    <div className="mb-4 p-3 bg-red-100 text-red-800 rounded-md">
-                      {voiceDataError}
-                    </div>
-                  )}
-                  
-                  <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
-                    <div className="w-full sm:w-64">
-                      <select
-                        value={selectedVoice}
-                        onChange={(e) => setSelectedVoice(e.target.value)}
-                        className="w-full p-2 border rounded"
-                        disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
-                      >
-                        {voices.length === 0 ? (
-                          <option value="">No voices available</option>
-                        ) : (
-                          voices.map((voice) => (
-                            <option key={voice.voice_id} value={voice.voice_id}>
-                              {voice.name}
-                            </option>
-                          ))
-                        )}
-                      </select>
                     </div>
                     
-                    <button
-                      onClick={playVoicePreview}
-                      disabled={!selectedVoice || voices.length === 0 || isPlayingPreview || !voices.find(v => v.voice_id === selectedVoice)?.preview_url || projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
-                      className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
-                    >
-                      {isPlayingPreview ? 'Playing...' : 'Play Preview'}
-                    </button>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Author Name</label>
+                      <div className="flex gap-2">
+                        <Input
+                          value={project?.author_name || ''}
+                          readOnly
+                          className="bg-gray-50"
+                        />
+                      </div>
+                    </div>
                     
-                    <audio ref={audioRef} className="hidden" controls />
-                  </div>
-                  
-                  {/* Voice Labels Display */}
-                  {selectedVoice && voices.length > 0 && projectStatus?.Ebook_Prep_Status === "Ebook Processing Complete" && (
-                    <div className="mt-4">
-                      <h4 className="text-sm font-medium mb-2">Voice Characteristics</h4>
-                      <div className="grid grid-cols-2 gap-3">
-                        {/* Display standard labels if available */}
-                        {voices.find(v => v.voice_id === selectedVoice)?.labels && 
-                         Object.keys(voices.find(v => v.voice_id === selectedVoice)?.labels || {}).length > 0 ? 
-                          Object.entries(voices.find(v => v.voice_id === selectedVoice)?.labels || {}).map(([key, value]) => (
-                            <div key={key} className="flex flex-col">
-                              <span className="text-xs font-medium text-gray-500 capitalize">{key}</span>
-                              <span className="text-sm">{value}</span>
-                            </div>
-                          ))
-                          : 
-                          <div className="col-span-2 text-sm text-gray-500">
-                            No characteristics available for this voice.
-                          </div>
+                    <Button 
+                      variant="outline" 
+                      onClick={() => {
+                        // Populate the form with current project data
+                        if (project) {
+                          setEditFormData({
+                            project_name: project.project_name,
+                            book_title: project.book_title,
+                            author_name: project.author_name,
+                            description: project.description
+                          });
                         }
-                        
-                        {/* Always show Preview availability */}
-                        <div className="flex flex-col">
-                          <span className="text-xs font-medium text-gray-500">Preview</span>
-                          <span className="text-sm">
-                            {voices.find(v => v.voice_id === selectedVoice)?.preview_url ? 'Yes' : 'No'}
-                          </span>
+                        setIsEditDialogOpen(true);
+                      }}
+                    >
+                      Edit Information
+                    </Button>
+                  </div>
+                  
+                  {/* Voice Selection Section - Conditionally enabled */}
+                  <div className={`space-y-4 border p-4 rounded-md ${projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" ? 'opacity-50' : ''}`}>
+                    <h3 className="text-md font-medium">Voice Selection</h3>
+                    <p className="text-sm text-gray-600">
+                      Select a voice that will be used to create the storyboard files.
+                    </p>
+                    
+                    {/* Show currently selected voice if one is saved */}
+                    {project?.voice_name && project?.voice_id && (
+                      <div className="mb-4 p-3 bg-green-50 text-green-800 rounded-md flex items-center justify-between">
+                        <div>
+                          <span className="font-medium">Currently selected voice: </span>
+                          {project.voice_name}
                         </div>
-                      </div>
-                      
-                      {/* Add Select This Voice button */}
-                      <div className="mt-4">
                         <button
                           onClick={() => setIsVoiceConfirmOpen(true)}
-                          className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400"
-                          disabled={
-                            projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" || 
-                            projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait" ||
-                            projectStatus?.Storyboard_Status === "Storyboard Complete"
-                          }
+                          className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700"
+                          disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
                         >
-                          {projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait" || 
-                           projectStatus?.Storyboard_Status === "Storyboard Complete" 
-                            ? "Voice Selected" 
-                            : "Select This Voice"}
+                          Change
                         </button>
                       </div>
+                    )}
+                    
+                    {voiceDataError && (
+                      <div className="mb-4 p-3 bg-red-100 text-red-800 rounded-md">
+                        {voiceDataError}
+                      </div>
+                    )}
+                    
+                    <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+                      <div className="w-full sm:w-64">
+                        <select
+                          value={selectedVoice}
+                          onChange={(e) => setSelectedVoice(e.target.value)}
+                          className="w-full p-2 border rounded"
+                          disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
+                        >
+                          {voices.length === 0 ? (
+                            <option value="">No voices available</option>
+                          ) : (
+                            voices.map((voice) => (
+                              <option key={voice.voice_id} value={voice.voice_id}>
+                                {voice.name}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                      </div>
+                      
+                      <button
+                        onClick={playVoicePreview}
+                        disabled={!selectedVoice || voices.length === 0 || isPlayingPreview || !voices.find(v => v.voice_id === selectedVoice)?.preview_url || projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
+                        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
+                      >
+                        {isPlayingPreview ? 'Playing...' : 'Play Preview'}
+                      </button>
+                      
+                      <audio ref={audioRef} className="hidden" controls />
                     </div>
-                  )}
+                    
+                    {/* Voice Labels Display */}
+                    {selectedVoice && voices.length > 0 && projectStatus?.Ebook_Prep_Status === "Ebook Processing Complete" && (
+                      <div className="mt-4">
+                        <h4 className="text-sm font-medium mb-2">Voice Characteristics</h4>
+                        <div className="grid grid-cols-2 gap-3">
+                          {/* Display standard labels if available */}
+                          {voices.find(v => v.voice_id === selectedVoice)?.labels && 
+                          Object.keys(voices.find(v => v.voice_id === selectedVoice)?.labels || {}).length > 0 ? 
+                            Object.entries(voices.find(v => v.voice_id === selectedVoice)?.labels || {}).map(([key, value]) => (
+                              <div key={key} className="flex flex-col">
+                                <span className="text-xs font-medium text-gray-500 capitalize">{key}</span>
+                                <span className="text-sm">{value}</span>
+                              </div>
+                            ))
+                            : 
+                            <div className="col-span-2 text-sm text-gray-500">
+                              No characteristics available for this voice.
+                            </div>
+                          }
+                          
+                          {/* Always show Preview availability */}
+                          <div className="flex flex-col">
+                            <span className="text-xs font-medium text-gray-500">Preview</span>
+                            <span className="text-sm">
+                              {voices.find(v => v.voice_id === selectedVoice)?.preview_url ? 'Yes' : 'No'}
+                            </span>
+                          </div>
+                        </div>
+                        
+                        {/* Add Select This Voice button */}
+                        <div className="mt-4">
+                          <button
+                            onClick={() => setIsVoiceConfirmOpen(true)}
+                            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400"
+                            disabled={
+                              projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" || 
+                              projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait" ||
+                              projectStatus?.Storyboard_Status === "Storyboard Complete"
+                            }
+                          >
+                            {projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait" || 
+                            projectStatus?.Storyboard_Status === "Storyboard Complete" 
+                              ? "Voice Selected" 
+                              : "Select This Voice"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 
-                {/* Generate Storyboard Button removed - now at the top */}
+                {/* Right Column */}
+                <div>
+                  {/* Name Pronunciation Section - Conditionally enabled */}
+                  <div className={`space-y-4 border p-4 rounded-md ${projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" ? 'opacity-50' : ''}`}>
+                    <h3 className="text-md font-medium">Name Pronunciation</h3>
+                    <p className="text-sm text-gray-600">
+                      View pronunciation guides for names and entities in your book.
+                    </p>
+                    
+                    {nerData ? (
+                      <>
+                        <div className="w-full sm:w-64">
+                          <select
+                            value={selectedNameEntity}
+                            onChange={(e) => setSelectedNameEntity(e.target.value)}
+                            className="w-full p-2 border rounded"
+                            disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
+                          >
+                            <option value="">Select a name or entity</option>
+                            
+                            {/* Person - Common */}
+                            {nerData.book_summary?.person_entities_common?.length > 0 && (
+                              <optgroup label="Person - Common">
+                                {nerData.book_summary.person_entities_common.map((entity: EntityItem) => (
+                                  <option key={`person-common-${entity.name}`} value={`person-common-${entity.name}`}>
+                                    {entity.name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            
+                            {/* Person - Unusual */}
+                            {nerData.book_summary?.person_entities_unusual?.length > 0 && (
+                              <optgroup label="Person - Unusual">
+                                {nerData.book_summary.person_entities_unusual.map((entity: EntityItem) => (
+                                  <option key={`person-unusual-${entity.name}`} value={`person-unusual-${entity.name}`}>
+                                    {entity.name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            
+                            {/* Location - Common */}
+                            {nerData.book_summary?.location_entities_common?.length > 0 && (
+                              <optgroup label="Location - Common">
+                                {nerData.book_summary.location_entities_common.map((entity: EntityItem) => (
+                                  <option key={`location-common-${entity.name}`} value={`location-common-${entity.name}`}>
+                                    {entity.name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            
+                            {/* Location - Unusual */}
+                            {nerData.book_summary?.location_entities_unusual?.length > 0 && (
+                              <optgroup label="Location - Unusual">
+                                {nerData.book_summary.location_entities_unusual.map((entity: EntityItem) => (
+                                  <option key={`location-unusual-${entity.name}`} value={`location-unusual-${entity.name}`}>
+                                    {entity.name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            
+                            {/* Organization - Common */}
+                            {nerData.book_summary?.organization_entities_common?.length > 0 && (
+                              <optgroup label="Organization - Common">
+                                {nerData.book_summary.organization_entities_common.map((entity: EntityItem) => (
+                                  <option key={`org-common-${entity.name}`} value={`org-common-${entity.name}`}>
+                                    {entity.name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            
+                            {/* Organization - Unusual */}
+                            {nerData.book_summary?.organization_entities_unusual?.length > 0 && (
+                              <optgroup label="Organization - Unusual">
+                                {nerData.book_summary.organization_entities_unusual.map((entity: EntityItem) => (
+                                  <option key={`org-unusual-${entity.name}`} value={`org-unusual-${entity.name}`}>
+                                    {entity.name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                          </select>
+                        </div>
+                        
+                        {/* Display pronunciation details if an entity is selected */}
+                        {selectedNameEntity && (
+                          <div className="mt-4 p-3 bg-blue-50 rounded-md">
+                            {(() => {
+                              // Parse the selected value to get category and name
+                              const [category, ...nameParts] = selectedNameEntity.split('-')
+                              // Remove the unused variable
+                              
+                              // Find the selected entity
+                              let selectedEntity: EntityItem | null = null
+                              
+                              if (category === 'person' && nameParts[0] === 'common') {
+                                selectedEntity = nerData.book_summary.person_entities_common.find(
+                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                ) || null
+                              } else if (category === 'person' && nameParts[0] === 'unusual') {
+                                selectedEntity = nerData.book_summary.person_entities_unusual.find(
+                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                ) || null
+                              } else if (category === 'location' && nameParts[0] === 'common') {
+                                selectedEntity = nerData.book_summary.location_entities_common.find(
+                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                ) || null
+                              } else if (category === 'location' && nameParts[0] === 'unusual') {
+                                selectedEntity = nerData.book_summary.location_entities_unusual.find(
+                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                ) || null
+                              } else if (category === 'org' && nameParts[0] === 'common') {
+                                selectedEntity = nerData.book_summary.organization_entities_common.find(
+                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                ) || null
+                              } else if (category === 'org' && nameParts[0] === 'unusual') {
+                                selectedEntity = nerData.book_summary.organization_entities_unusual.find(
+                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                ) || null
+                              }
+                              
+                              if (selectedEntity) {
+                                return (
+                                  <div className="space-y-2">
+                                    <div>
+                                      <span className="font-medium">Name: </span>
+                                      {selectedEntity.name}
+                                    </div>
+                                    <div>
+                                      <span className="font-medium">IPA Pronunciation: </span>
+                                      <code className="bg-gray-100 px-1 py-0.5 rounded">{selectedEntity.IPA}</code>
+                                    </div>
+                                    <div>
+                                      <span className="font-medium">Hard to Pronounce: </span>
+                                      <span className={selectedEntity.HTP ? "text-amber-600" : "text-green-600"}>
+                                        {selectedEntity.HTP ? "Yes" : "No"}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )
+                              }
+                              
+                              return <div>Entity details not found</div>
+                            })()}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="p-3 bg-yellow-50 text-yellow-800 rounded-md">
+                        No pronunciation data available. Please process the ebook first.
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </Card>
           </TabsContent>
