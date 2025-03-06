@@ -275,6 +275,10 @@ export default function ProjectDetail() {
   // Add state to track if voice is selected
   const [isVoiceSelected, setIsVoiceSelected] = useState<boolean | null>(null)
 
+  // Add state for GPT IPA pronunciation
+  const [gptIpaPronunciation, setGptIpaPronunciation] = useState<string | null>(null)
+  const [isLoadingIpa, setIsLoadingIpa] = useState(false)
+
   const fetchProject = useCallback(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -1477,6 +1481,36 @@ export default function ProjectDetail() {
     checkVoiceSelection()
   }, [projectStatus, checkVoiceSelection])
 
+  // Add function to get IPA pronunciation from GPT
+  const getIpaPronunciation = async (name: string) => {
+    if (!name.trim()) return
+    
+    try {
+      setIsLoadingIpa(true)
+      setGptIpaPronunciation(null)
+      
+      const response = await fetch('/api/gpt-pronunciation', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name }),
+      })
+      
+      if (!response.ok) {
+        throw new Error('Failed to get pronunciation')
+      }
+      
+      const data = await response.json()
+      setGptIpaPronunciation(data.ipaPronunciation)
+    } catch (error) {
+      console.error('Error getting IPA pronunciation:', error)
+      toast.error('Failed to get IPA pronunciation')
+    } finally {
+      setIsLoadingIpa(false)
+    }
+  }
+
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
 
@@ -1971,26 +2005,52 @@ export default function ProjectDetail() {
                               className="w-full p-2 border rounded"
                             />
                           </div>
-                          <button
-                            onClick={() => {
-                              const nameInput = document.getElementById('test-name-input') as HTMLInputElement
-                              if (nameInput && nameInput.value.trim()) {
-                                playNameAudio(nameInput.value.trim())
-                              } else {
-                                toast.error('Please enter a name')
-                              }
-                            }}
-                            disabled={isPlayingNameAudio || !selectedVoice}
-                            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
-                          >
-                            {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
-                          </button>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                const nameInput = document.getElementById('test-name-input') as HTMLInputElement
+                                if (nameInput && nameInput.value.trim()) {
+                                  playNameAudio(nameInput.value.trim())
+                                } else {
+                                  toast.error('Please enter a name')
+                                }
+                              }}
+                              disabled={isPlayingNameAudio || !selectedVoice}
+                              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
+                            >
+                              {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
+                            </button>
+                            <button
+                              onClick={() => {
+                                const nameInput = document.getElementById('test-name-input') as HTMLInputElement
+                                if (nameInput && nameInput.value.trim()) {
+                                  getIpaPronunciation(nameInput.value.trim())
+                                } else {
+                                  toast.error('Please enter a name')
+                                }
+                              }}
+                              disabled={isLoadingIpa}
+                              className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-400"
+                            >
+                              {isLoadingIpa ? 'Loading...' : 'Get IPA'}
+                            </button>
+                          </div>
                         </div>
+                        
+                        {/* Display GPT IPA pronunciation if available */}
+                        {gptIpaPronunciation && (
+                          <div className="mt-4 p-3 bg-purple-50 rounded-md">
+                            <div className="space-y-2">
+                              <div>
+                                <span className="font-medium">IPA Pronunciation: </span>
+                                <code className="bg-gray-100 px-1 py-0.5 rounded">{gptIpaPronunciation}</code>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                         
                         {/* Audio element for name playback */}
                         <audio ref={nameAudioRef} className="hidden" controls />
-                        
-                        {/* Removed the pronunciation details box from here as it's now placed above */}
                       </>
                     ) : (
                       <div className="p-3 bg-yellow-50 text-yellow-800 rounded-md">
