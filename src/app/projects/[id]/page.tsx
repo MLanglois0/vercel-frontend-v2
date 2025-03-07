@@ -281,6 +281,12 @@ export default function ProjectDetail() {
   const [isConfirmedForAudiobook, setIsConfirmedForAudiobook] = useState(false)
   const [isUseIpaButtonDisabled, setIsUseIpaButtonDisabled] = useState(true)
 
+  // Add state for new name pronunciation
+  const [newNameIpaPronunciation, setNewNameIpaPronunciation] = useState<string | null>(null)
+  const [isLoadingNewNameIpa, setIsLoadingNewNameIpa] = useState(false)
+  const [isNewNameConfirmedForAudiobook, setIsNewNameConfirmedForAudiobook] = useState(false)
+  const [isNewNameUseIpaButtonDisabled, setIsNewNameUseIpaButtonDisabled] = useState(true)
+
   const fetchProject = useCallback(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -1481,16 +1487,25 @@ export default function ProjectDetail() {
   }, [projectStatus, checkVoiceSelection])
 
   // Add function to get IPA pronunciation from GPT
-  const getIpaPronunciation = async (name: string) => {
+  const getIpaPronunciation = async (name: string, controlType: 'corrected' | 'newName' = 'corrected') => {
     if (!name.trim()) return
     
     try {
-      setIsLoadingIpa(true)
-      setGptIpaPronunciation(null)
-      // Reset confirmation status and enable the Use this IPA button
-      setIsConfirmedForAudiobook(false)
-      setIsUseIpaButtonDisabled(false)
+      if (controlType === 'corrected') {
+        setIsLoadingIpa(true)
+        setGptIpaPronunciation(null)
+        // Reset confirmation status and enable the Use this IPA button
+        setIsConfirmedForAudiobook(false)
+        setIsUseIpaButtonDisabled(false)
+      } else {
+        setIsLoadingNewNameIpa(true)
+        setNewNameIpaPronunciation(null)
+        // Reset confirmation status and enable the Use this IPA button
+        setIsNewNameConfirmedForAudiobook(false)
+        setIsNewNameUseIpaButtonDisabled(false)
+      }
       
+      // Make API request to get pronunciation
       const response = await fetch('/api/gpt-pronunciation', {
         method: 'POST',
         headers: {
@@ -1504,22 +1519,37 @@ export default function ProjectDetail() {
       }
       
       const data = await response.json()
-      setGptIpaPronunciation(data.ipaPronunciation)
+      if (controlType === 'corrected') {
+        setGptIpaPronunciation(data.ipaPronunciation)
+      } else {
+        setNewNameIpaPronunciation(data.ipaPronunciation)
+      }
     } catch (error) {
       console.error('Error getting IPA pronunciation:', error)
       toast.error('Failed to get IPA pronunciation')
     } finally {
-      setIsLoadingIpa(false)
+      if (controlType === 'corrected') {
+        setIsLoadingIpa(false)
+      } else {
+        setIsLoadingNewNameIpa(false)
+      }
     }
   }
 
   // Add function to confirm IPA for audiobook
-  const confirmIpaForAudiobook = () => {
-    if (gptIpaPronunciation) {
+  const confirmIpaForAudiobook = (controlType: 'corrected' | 'newName' = 'corrected') => {
+    if (controlType === 'corrected' && gptIpaPronunciation) {
       setIsConfirmedForAudiobook(true)
       // Disable the Use this IPA button after it's pressed
       setIsUseIpaButtonDisabled(true)
       toast.success('IPA pronunciation confirmed for audiobook')
+      // Here you would typically save this to your database
+      // This is a placeholder for that functionality
+    } else if (controlType === 'newName' && newNameIpaPronunciation) {
+      setIsNewNameConfirmedForAudiobook(true)
+      // Disable the Use this IPA button after it's pressed
+      setIsNewNameUseIpaButtonDisabled(true)
+      toast.success('New name IPA pronunciation confirmed for audiobook')
       // Here you would typically save this to your database
       // This is a placeholder for that functionality
     }
@@ -1994,12 +2024,6 @@ export default function ProjectDetail() {
                                       <span className="font-medium">IPA Pronunciation: </span>
                                       <code className="bg-gray-100 px-1 py-0.5 rounded">{selectedEntity.IPA}</code>
                                     </div>
-                                    <div>
-                                      <span className="font-medium">Hard to Pronounce: </span>
-                                      <span className={selectedEntity.HTP ? "text-amber-600" : "text-green-600"}>
-                                        {selectedEntity.HTP ? "Yes" : "No"}
-                                      </span>
-                                    </div>
                                   </div>
                                 )
                               }
@@ -2013,9 +2037,6 @@ export default function ProjectDetail() {
                               </div>
                               <div>
                                 <span className="font-medium">IPA Pronunciation: </span>
-                              </div>
-                              <div>
-                                <span className="font-medium">Hard to Pronounce: </span>
                               </div>
                             </div>
                           )}
@@ -2052,7 +2073,7 @@ export default function ProjectDetail() {
                                 onClick={() => {
                                   const nameInput = document.getElementById('test-name-input') as HTMLInputElement
                                   if (nameInput && nameInput.value.trim()) {
-                                    getIpaPronunciation(nameInput.value.trim())
+                                    getIpaPronunciation(nameInput.value.trim(), 'corrected')
                                   } else {
                                     toast.error('Please enter a name')
                                   }
@@ -2063,7 +2084,7 @@ export default function ProjectDetail() {
                                 {isLoadingIpa ? 'Loading...' : 'Get IPA'}
                               </button>
                               <button
-                                onClick={confirmIpaForAudiobook}
+                                onClick={() => confirmIpaForAudiobook('corrected')}
                                 disabled={!gptIpaPronunciation || isUseIpaButtonDisabled}
                                 className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400"
                               >
@@ -2073,7 +2094,7 @@ export default function ProjectDetail() {
                           </div>
                         </div>
                         
-                        {/* Display GPT IPA pronunciation - always visible */}
+                        {/* Display Corrected Pronunciation IPA */}
                         <div className="mt-4 p-3 bg-purple-50 rounded-md">
                           <div className="space-y-2">
                             <div>
@@ -2088,6 +2109,109 @@ export default function ProjectDetail() {
                               <span className="font-medium">Confirmed Pronunciation for Audiobook: </span>
                               <span className={isConfirmedForAudiobook ? "text-green-600" : "text-gray-500"}>
                                 {isConfirmedForAudiobook ? "Yes" : "No"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Divider */}
+                        <div className="my-6 border-t-2 border-gray-400"></div>
+                        
+                        {/* Add Enter a New Name section */}
+                        <div>
+                          <h4 className="text-md font-medium mb-2">Enter a New Name</h4>
+                          <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center mb-3">
+                            <div className="w-full sm:w-64">
+                              <label className="block text-sm font-medium mb-1">Name As Spelled in the Book</label>
+                              <input
+                                type="text"
+                                placeholder="Enter name as in book"
+                                id="book-name-input"
+                                className="w-full p-2 border rounded"
+                              />
+                            </div>
+                            <div className="flex gap-2 mt-6">
+                              <button
+                                onClick={() => {
+                                  const nameInput = document.getElementById('book-name-input') as HTMLInputElement
+                                  if (nameInput && nameInput.value.trim()) {
+                                    playNameAudio(nameInput.value.trim())
+                                  } else {
+                                    toast.error('Please enter a name')
+                                  }
+                                }}
+                                disabled={isPlayingNameAudio || !selectedVoice}
+                                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
+                              >
+                                {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
+                              </button>
+                            </div>
+                          </div>
+                          
+                          <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+                            <div className="w-full sm:w-64">
+                              <input
+                                type="text"
+                                placeholder="Enter a new name"
+                                id="new-name-input"
+                                className="w-full p-2 border rounded"
+                              />
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  const nameInput = document.getElementById('new-name-input') as HTMLInputElement
+                                  if (nameInput && nameInput.value.trim()) {
+                                    playNameAudio(nameInput.value.trim())
+                                  } else {
+                                    toast.error('Please enter a name')
+                                  }
+                                }}
+                                disabled={isPlayingNameAudio || !selectedVoice}
+                                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
+                              >
+                                {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  const nameInput = document.getElementById('new-name-input') as HTMLInputElement
+                                  if (nameInput && nameInput.value.trim()) {
+                                    getIpaPronunciation(nameInput.value.trim(), 'newName')
+                                  } else {
+                                    toast.error('Please enter a name')
+                                  }
+                                }}
+                                disabled={isLoadingNewNameIpa}
+                                className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-400"
+                              >
+                                {isLoadingNewNameIpa ? 'Loading...' : 'Get IPA'}
+                              </button>
+                              <button
+                                onClick={() => confirmIpaForAudiobook('newName')}
+                                disabled={!newNameIpaPronunciation || isNewNameUseIpaButtonDisabled}
+                                className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400"
+                              >
+                                Use this IPA
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Display New Name IPA pronunciation */}
+                        <div className="mt-4 p-3 bg-purple-50 rounded-md">
+                          <div className="space-y-2">
+                            <div>
+                              <span className="font-medium">IPA Pronunciation: </span>
+                              {newNameIpaPronunciation ? (
+                                <code className="bg-gray-100 px-1 py-0.5 rounded">{newNameIpaPronunciation}</code>
+                              ) : (
+                                <span className="text-gray-500">No pronunciation generated yet</span>
+                              )}
+                            </div>
+                            <div>
+                              <span className="font-medium">Confirmed Pronunciation for Audiobook: </span>
+                              <span className={isNewNameConfirmedForAudiobook ? "text-green-600" : "text-gray-500"}>
+                                {isNewNameConfirmedForAudiobook ? "Yes" : "No"}
                               </span>
                             </div>
                           </div>
