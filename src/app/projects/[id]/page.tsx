@@ -2430,16 +2430,15 @@ export default function ProjectDetail() {
                 <div className="flex items-center justify-center min-h-[200px]">
                   <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent"></div>
                 </div>
-              ) : (projectStatus?.Storyboard_Status !== "Storyboard Complete" && 
-                   projectStatus?.Storyboard_Status !== "Processing Storyboard, Please Wait" && 
-                   !isReplaceImagesInProgress && 
-                   items.length === 0) ? (
-                <div className="flex items-center justify-center min-h-[400px]">
-                  <div className="text-center">
-                    <p className="text-xl font-medium text-gray-600">Storyboard Not Yet Available</p>
-                    <p className="text-sm text-gray-500 mt-2">The storyboard will appear here once it&apos;s generated.</p>
-                  </div>
-                </div>
+              ) : projectStatus?.Storyboard_Status !== "Storyboard Complete" ? (
+                <Card className="p-8 text-center">
+                  <p className="text-muted-foreground">No storyboard available yet.</p>
+                  {projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait" && (
+                    <div className="mt-4 flex justify-center">
+                      <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent"></div>
+                    </div>
+                  )}
+                </Card>
               ) : items.length > 0 ? (
                 <div className="relative">
                   <div
