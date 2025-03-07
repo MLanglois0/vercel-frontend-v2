@@ -23,7 +23,9 @@ import {
   restoreAudioFromOldSet,
   checkAudioTrackExists,
   getVoiceDataFile,
-  getNerDataFile
+  getNerDataFile,
+  saveJsonToR2,
+  getJsonFromR2
 } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
@@ -219,6 +221,13 @@ interface VideoFile {
   path: string
 }
 
+// Define interface for pronunciation corrections
+interface PronunciationCorrection {
+  originalName: string;
+  correctedPronunciation: string;
+  ipaPronunciation: string;
+}
+
 export default function ProjectDetail() {
   const params = useParams()
   const [project, setProject] = useState<Project | null>(null)
@@ -286,6 +295,9 @@ export default function ProjectDetail() {
   const [isLoadingNewNameIpa, setIsLoadingNewNameIpa] = useState(false)
   const [isNewNameConfirmedForAudiobook, setIsNewNameConfirmedForAudiobook] = useState(false)
   const [isNewNameUseIpaButtonDisabled, setIsNewNameUseIpaButtonDisabled] = useState(true)
+  // Add state for pronunciation corrections
+  const [pronunciationCorrections, setPronunciationCorrections] = useState<PronunciationCorrection[]>([])
+  const [isViewCorrectionsOpen, setIsViewCorrectionsOpen] = useState(false)
 
   const fetchProject = useCallback(async () => {
     try {
@@ -1486,6 +1498,64 @@ export default function ProjectDetail() {
     checkVoiceSelection()
   }, [projectStatus, checkVoiceSelection])
 
+  // Load pronunciation corrections from R2 when component mounts
+  useEffect(() => {
+    const loadPronunciationCorrections = async () => {
+      if (project?.id) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession()
+          if (!session) return
+          
+          const corrections = await getJsonFromR2<PronunciationCorrection[]>({
+            userId: session.user.id,
+            projectId: project.id,
+            filename: 'pronunciation-corrections.json'
+          })
+          
+          if (corrections) {
+            setPronunciationCorrections(corrections)
+          }
+        } catch (error) {
+          console.error('Error loading pronunciation corrections from R2:', error)
+        }
+      }
+    }
+    
+    loadPronunciationCorrections()
+  }, [project?.id])
+
+  // Save pronunciation corrections to R2 when they change
+  useEffect(() => {
+    const savePronunciationCorrections = async () => {
+      if (project?.id && pronunciationCorrections.length > 0) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession()
+          if (!session) return
+          
+          await saveJsonToR2<PronunciationCorrection[]>({
+            userId: session.user.id,
+            projectId: project.id,
+            filename: 'pronunciation-corrections.json',
+            data: pronunciationCorrections
+          })
+        } catch (error) {
+          console.error('Error saving pronunciation corrections to R2:', error)
+        }
+      }
+    }
+    
+    savePronunciationCorrections()
+  }, [project?.id, pronunciationCorrections])
+
+  // Add function to delete a pronunciation correction
+  const deletePronunciationCorrection = async (originalName: string) => {
+    // Remove the correction from the state
+    setPronunciationCorrections(prev => prev.filter(c => c.originalName !== originalName))
+    
+    // Show a toast notification
+    toast.success(`Pronunciation correction for "${originalName}" deleted`)
+  }
+
   // Add function to get IPA pronunciation from GPT
   const getIpaPronunciation = async (name: string, controlType: 'corrected' | 'newName' = 'corrected') => {
     if (!name.trim()) return
@@ -1542,16 +1612,93 @@ export default function ProjectDetail() {
       setIsConfirmedForAudiobook(true)
       // Disable the Use this IPA button after it's pressed
       setIsUseIpaButtonDisabled(true)
+      
+      // Get the name from the input field
+      const nameInput = document.getElementById('test-name-input') as HTMLInputElement
+      if (nameInput && nameInput.value.trim()) {
+        // Get the original name from the dropdown if selected
+        let originalName = nameInput.value.trim();
+        
+        // If a name is selected in the dropdown, use that as the original name
+        if (selectedNameEntity) {
+          // Parse the selected value to get category and name
+          const [category, ...nameParts] = selectedNameEntity.split('-');
+          
+          // Find the selected entity
+          let selectedEntity: EntityItem | null = null;
+          
+          if (category === 'person' && nameParts[0] === 'common') {
+            selectedEntity = nerData?.book_summary.person_entities_common.find(
+              (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+            ) || null;
+          } else if (category === 'person' && nameParts[0] === 'unusual') {
+            selectedEntity = nerData?.book_summary.person_entities_unusual.find(
+              (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+            ) || null;
+          } else if (category === 'location' && nameParts[0] === 'common') {
+            selectedEntity = nerData?.book_summary.location_entities_common.find(
+              (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+            ) || null;
+          } else if (category === 'location' && nameParts[0] === 'unusual') {
+            selectedEntity = nerData?.book_summary.location_entities_unusual.find(
+              (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+            ) || null;
+          } else if (category === 'org' && nameParts[0] === 'common') {
+            selectedEntity = nerData?.book_summary.organization_entities_common.find(
+              (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+            ) || null;
+          } else if (category === 'org' && nameParts[0] === 'unusual') {
+            selectedEntity = nerData?.book_summary.organization_entities_unusual.find(
+              (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+            ) || null;
+          }
+          
+          if (selectedEntity) {
+            originalName = selectedEntity.name;
+          }
+        }
+        
+        // Save the pronunciation correction
+        const newCorrection: PronunciationCorrection = {
+          originalName: originalName,
+          correctedPronunciation: nameInput.value.trim(),
+          ipaPronunciation: gptIpaPronunciation
+        }
+        
+        // Update the corrections array, replacing any existing correction for the same name
+        setPronunciationCorrections(prev => {
+          const filtered = prev.filter(c => c.originalName !== newCorrection.originalName)
+          return [...filtered, newCorrection]
+        })
+      }
+      
       toast.success('IPA pronunciation confirmed for audiobook')
-      // Here you would typically save this to your database
-      // This is a placeholder for that functionality
     } else if (controlType === 'newName' && newNameIpaPronunciation) {
       setIsNewNameConfirmedForAudiobook(true)
       // Disable the Use this IPA button after it's pressed
       setIsNewNameUseIpaButtonDisabled(true)
+      
+      // Get the original name and corrected pronunciation from input fields
+      const originalNameInput = document.getElementById('book-name-input') as HTMLInputElement
+      const correctedNameInput = document.getElementById('new-name-input') as HTMLInputElement
+      
+      if (originalNameInput && originalNameInput.value.trim() && 
+          correctedNameInput && correctedNameInput.value.trim()) {
+        // Save the pronunciation correction
+        const newCorrection: PronunciationCorrection = {
+          originalName: originalNameInput.value.trim(),
+          correctedPronunciation: correctedNameInput.value.trim(),
+          ipaPronunciation: newNameIpaPronunciation
+        }
+        
+        // Update the corrections array, replacing any existing correction for the same name
+        setPronunciationCorrections(prev => {
+          const filtered = prev.filter(c => c.originalName !== newCorrection.originalName)
+          return [...filtered, newCorrection]
+        })
+      }
+      
       toast.success('New name IPA pronunciation confirmed for audiobook')
-      // Here you would typically save this to your database
-      // This is a placeholder for that functionality
     }
   }
 
@@ -1847,7 +1994,20 @@ export default function ProjectDetail() {
                 <div>
                   {/* Name Pronunciation Section - Conditionally enabled */}
                   <div className={`space-y-4 border p-4 rounded-md ${projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" ? 'opacity-50' : ''}`}>
-                    <h3 className="text-md font-medium">Name Pronunciation</h3>
+                    <div className="flex justify-between items-center">
+                      <h3 className="text-md font-medium">Name Pronunciation</h3>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setIsViewCorrectionsOpen(true)}
+                        disabled={pronunciationCorrections.length === 0}
+                        className={pronunciationCorrections.length > 0 ? 
+                          "bg-green-600 text-white hover:bg-green-700 border-green-500" : 
+                          ""}
+                      >
+                        View Corrections
+                      </Button>
+                    </div>
                     <p className="text-sm text-gray-600">
                       View pronunciation guides for names and entities in your book. Only correct the pronunciation if needed, otherwise simply check to ensure unusual names sound as you intended.
                     </p>
@@ -2796,12 +2956,13 @@ export default function ProjectDetail() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Confirm Voice Selection</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to use this voice for your audiobook? This will be used for all narration.
+            </DialogDescription>
           </DialogHeader>
           <div className="py-4">
-            <p>
-              <span className="font-medium">{voices.find(v => v.voice_id === selectedVoice)?.name}</span> selected. 
-              Are you sure? This voice will be used to create the narration for your audio book. 
-              It can be changed before you create the storyboard but not afterwards.
+            <p className="text-sm text-gray-500">
+              Selected Voice: <span className="font-medium">{selectedVoice ? voices.find(v => v.voice_id === selectedVoice)?.name : 'None'}</span>
             </p>
           </div>
           <DialogFooter>
@@ -2813,6 +2974,53 @@ export default function ProjectDetail() {
               disabled={isUpdatingVoice}
             >
               {isUpdatingVoice ? 'Saving...' : 'I\'m Sure'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Pronunciation Corrections Dialog */}
+      <Dialog open={isViewCorrectionsOpen} onOpenChange={setIsViewCorrectionsOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Name Pronunciation Corrections</DialogTitle>
+            <DialogDescription>
+              These corrections will be used when generating the audiobook.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4 max-h-[60vh] overflow-y-auto">
+            {pronunciationCorrections.length > 0 ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-4 gap-4 font-medium text-sm border-b pb-2">
+                  <div>Original Name</div>
+                  <div>Corrected Pronunciation</div>
+                  <div>IPA Pronunciation</div>
+                  <div></div>
+                </div>
+                {pronunciationCorrections.map((correction, index) => (
+                  <div key={index} className="grid grid-cols-4 gap-4 text-sm border-b pb-2">
+                    <div>{correction.originalName}</div>
+                    <div>{correction.correctedPronunciation}</div>
+                    <div><code className="bg-gray-100 px-1 py-0.5 rounded">{correction.ipaPronunciation}</code></div>
+                    <div className="flex justify-end">
+                      <Button 
+                        variant="destructive" 
+                        size="sm"
+                        onClick={() => deletePronunciationCorrection(correction.originalName)}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-center text-gray-500">No pronunciation corrections have been saved yet.</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setIsViewCorrectionsOpen(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -836,3 +836,87 @@ export async function getNerDataFile({
   }
 }
 
+export async function saveJsonToR2<T>({
+  userId,
+  projectId,
+  filename,
+  data
+}: {
+  userId: string
+  projectId: string
+  filename: string
+  data: T
+}): Promise<{ success: boolean }> {
+  try {
+    // Create the path for the JSON file in the temp directory
+    const path = `${userId}/${projectId}/temp/${filename}`
+    
+    // Convert the data to a JSON string
+    const jsonString = JSON.stringify(data)
+    
+    // Create a buffer from the JSON string
+    const buffer = Buffer.from(jsonString)
+    
+    // Create the upload command
+    const uploadCommand = new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: path,
+      Body: buffer,
+      ContentType: 'application/json',
+    })
+    
+    // Send the upload command
+    await r2Client.send(uploadCommand)
+    
+    return { success: true }
+  } catch (error) {
+    console.error('Error saving JSON to R2:', error)
+    return { success: false }
+  }
+}
+
+export async function getJsonFromR2<T>({
+  userId,
+  projectId,
+  filename
+}: {
+  userId: string
+  projectId: string
+  filename: string
+}): Promise<T | null> {
+  try {
+    // Create the path for the JSON file in the temp directory
+    const path = `${userId}/${projectId}/temp/${filename}`
+    
+    // Create the get command
+    const getCommand = new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: path,
+    })
+    
+    try {
+      // Send the get command
+      const response = await r2Client.send(getCommand)
+      
+      // Get the JSON string from the response
+      const jsonString = await response.Body?.transformToString()
+      
+      if (!jsonString) {
+        return null
+      }
+      
+      // Parse the JSON string
+      return JSON.parse(jsonString) as T
+    } catch (error: unknown) {
+      // If the file doesn't exist, return null
+      if (typeof error === 'object' && error !== null && 'name' in error && error.name === 'NoSuchKey') {
+        return null
+      }
+      throw error
+    }
+  } catch (error) {
+    console.error('Error getting JSON from R2:', error)
+    return null
+  }
+}
+
