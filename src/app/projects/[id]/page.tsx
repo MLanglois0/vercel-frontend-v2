@@ -1849,7 +1849,7 @@ export default function ProjectDetail() {
                   <div className={`space-y-4 border p-4 rounded-md ${projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" ? 'opacity-50' : ''}`}>
                     <h3 className="text-md font-medium">Name Pronunciation</h3>
                     <p className="text-sm text-gray-600">
-                      View pronunciation guides for names and entities in your book.
+                      View pronunciation guides for names and entities in your book. Only correct the pronunciation if needed, otherwise simply check to ensure unusual names sound as you intended.
                     </p>
                     
                     {nerData ? (
@@ -2125,7 +2125,7 @@ export default function ProjectDetail() {
                               <label className="block text-sm font-medium mb-1">Name As Spelled in the Book</label>
                               <input
                                 type="text"
-                                placeholder="Enter name as in book"
+                                placeholder="Enter Name"
                                 id="book-name-input"
                                 className="w-full p-2 border rounded"
                               />
@@ -2150,14 +2150,15 @@ export default function ProjectDetail() {
                           
                           <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
                             <div className="w-full sm:w-64">
+                              <label className="block text-sm font-medium mb-1">Corrected Pronunciation</label>
                               <input
                                 type="text"
-                                placeholder="Enter a new name"
+                                placeholder="Add Pronunciation if Needed"
                                 id="new-name-input"
                                 className="w-full p-2 border rounded"
                               />
                             </div>
-                            <div className="flex gap-2">
+                            <div className="flex gap-2 mt-6">
                               <button
                                 onClick={() => {
                                   const nameInput = document.getElementById('new-name-input') as HTMLInputElement
