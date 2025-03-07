@@ -298,7 +298,9 @@ export default function ProjectDetail() {
   // Add state for pronunciation corrections
   const [pronunciationCorrections, setPronunciationCorrections] = useState<PronunciationCorrection[]>([])
   const [isViewCorrectionsOpen, setIsViewCorrectionsOpen] = useState(false)
-
+  // Add state for storyboard confirmation dialog
+  const [isStoryboardConfirmOpen, setIsStoryboardConfirmOpen] = useState(false)
+  
   const fetchProject = useCallback(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -1096,6 +1098,17 @@ export default function ProjectDetail() {
   }
 
   const handleGenerateStoryboard = async () => {
+    // Check if voice is selected
+    if (!project?.voice_id) {
+      toast.error('Please select a voice first')
+      return
+    }
+    
+    // Show the confirmation dialog
+    setIsStoryboardConfirmOpen(true)
+  }
+  
+  const processStoryboardGeneration = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('No session')
@@ -1130,13 +1143,20 @@ export default function ProjectDetail() {
       
       // Use the voice name from the project instead of the voice ID
       const voiceName = project.voice_name || "Abe"; // Default to "Abe" if voice name not set
-
+      
       const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 2 -ss`
       await sendCommand(command)
-      toast.success('Generation started')
+      
+      // Close the confirmation dialog
+      setIsStoryboardConfirmOpen(false)
+      
+      toast.success('Storyboard generation started. This may take a few minutes.')
     } catch (error) {
       console.error('Error generating storyboard:', error)
-      toast.error('Failed to start generation')
+      toast.error('Failed to generate storyboard')
+      
+      // Close the confirmation dialog
+      setIsStoryboardConfirmOpen(false)
     }
   }
 
@@ -3021,6 +3041,70 @@ export default function ProjectDetail() {
           <DialogFooter>
             <Button onClick={() => setIsViewCorrectionsOpen(false)}>
               Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Storyboard Generation Confirmation Dialog */}
+      <Dialog open={isStoryboardConfirmOpen} onOpenChange={setIsStoryboardConfirmOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Confirm Storyboard Generation</DialogTitle>
+            <DialogDescription>
+              Please review the voice and pronunciation corrections that will be used for your storyboard.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4 space-y-6">
+            {/* Voice Information */}
+            <div className="space-y-2">
+              <h3 className="text-lg font-medium">Selected Voice</h3>
+              <div className="p-3 bg-blue-50 rounded-md">
+                <p className="font-medium">{project?.voice_name || 'No voice selected'}</p>
+                {project?.voice_id && voices.find(v => v.voice_id === project.voice_id)?.labels && (
+                  <div className="mt-2 text-sm text-gray-600">
+                    {Object.entries(voices.find(v => v.voice_id === project.voice_id)?.labels || {}).map(([key, value]) => (
+                      <div key={key} className="flex gap-2">
+                        <span className="capitalize">{key}:</span>
+                        <span>{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            {/* Pronunciation Corrections */}
+            <div className="space-y-2">
+              <h3 className="text-lg font-medium">Pronunciation Corrections</h3>
+              <div className="p-3 bg-blue-50 rounded-md max-h-[30vh] overflow-y-auto">
+                {pronunciationCorrections.length > 0 ? (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-3 gap-4 font-medium text-sm border-b pb-2">
+                      <div>Original Name</div>
+                      <div>Corrected Pronunciation</div>
+                      <div>IPA Pronunciation</div>
+                    </div>
+                    {pronunciationCorrections.map((correction, index) => (
+                      <div key={index} className="grid grid-cols-3 gap-4 text-sm border-b pb-2">
+                        <div>{correction.originalName}</div>
+                        <div>{correction.correctedPronunciation}</div>
+                        <div><code className="bg-gray-100 px-1 py-0.5 rounded">{correction.ipaPronunciation}</code></div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-center text-gray-500">No pronunciation corrections have been saved.</p>
+                )}
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="flex justify-between sm:justify-end gap-2">
+            <Button variant="outline" onClick={() => setIsStoryboardConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={processStoryboardGeneration}>
+              Proceed
             </Button>
           </DialogFooter>
         </DialogContent>
