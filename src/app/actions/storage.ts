@@ -875,6 +875,48 @@ export async function saveJsonToR2<T>({
   }
 }
 
+/**
+ * Save a text file to R2 storage
+ */
+export async function saveTextToR2({
+  userId,
+  projectId,
+  filename,
+  content,
+  contentType = 'text/plain'
+}: {
+  userId: string
+  projectId: string
+  filename: string
+  content: string
+  contentType?: string
+}): Promise<{ success: boolean, path?: string }> {
+  try {
+    // Create the path for the file in the temp directory
+    const path = `${userId}/${projectId}/temp/${filename}`
+    
+    // Create a buffer from the content
+    const buffer = Buffer.from(content)
+    
+    // Create the upload command
+    const uploadCommand = new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: path,
+      Body: buffer,
+      ContentType: contentType,
+    })
+    
+    // Send the upload command
+    await r2Client.send(uploadCommand)
+    
+    console.log('Text file saved to R2:', path)
+    return { success: true, path }
+  } catch (error) {
+    console.error('Error saving text file to R2:', error)
+    return { success: false }
+  }
+}
+
 export async function getJsonFromR2<T>({
   userId,
   projectId,

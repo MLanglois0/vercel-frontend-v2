@@ -34,6 +34,7 @@ import { Input } from "@/components/ui/input"
 import Image from 'next/image'
 import { Textarea } from "@/components/ui/textarea"
 import { sendCommand } from '@/app/actions/remote-commands'
+import { createPronunciationDictionary, debugPlsFormat, debugPlsFormatWithCorrections } from '@/app/actions/upload'
 
 interface Project {
   id: string
@@ -46,6 +47,8 @@ interface Project {
   cover_file_path: string
   voice_id?: string
   voice_name?: string
+  pls_dict_name?: string
+  pls_dict_file?: string
 }
 
 interface Voice {
@@ -355,37 +358,41 @@ export default function ProjectDetail() {
           setSelectedVoice("")
           setVoiceDataError('No voices available. Please process the ebook first.')
         }
+      } catch (error) {
+        console.error('Error loading voice data:', error)
+        setVoiceDataError('Error loading voice data')
+      }
+      
+      // Load NER data if it exists
+      try {
+        const nerData = await getNerDataFile({
+          userId: session.user.id,
+          projectId: project.id
+        })
         
-        // Load NER data if it exists
-        try {
-          const nerData = await getNerDataFile({
-            userId: session.user.id,
-            projectId: project.id
-          })
-          
-          console.log('NER data loaded from R2:', nerData)
-          
-          if (nerData) {
-            console.log('NER data:', nerData)
-            // Cast to the correct type and check if it has the expected structure
-            const typedNerData = nerData as unknown as NerDataFromApi;
-            if (typedNerData.book_summary) {
-              setNerData({
-                book_summary: typedNerData.book_summary,
-                chapters: typedNerData.chapters || []
-              });
-            } else {
-              console.log('NER data does not have the expected structure');
-            }
+        console.log('NER data loaded from R2:', nerData)
+        
+        if (nerData) {
+          console.log('NER data:', nerData)
+          // Cast to the correct type and check if it has the expected structure
+          const typedNerData = nerData as unknown as NerDataFromApi;
+          if (typedNerData.book_summary) {
+            setNerData({
+              book_summary: typedNerData.book_summary,
+              chapters: typedNerData.chapters || []
+            });
+          } else if (typedNerData.entities) {
+            // Handle legacy format
+            console.log('Legacy NER data format detected')
           } else {
-            console.log('No NER data found or invalid format')
+            console.log('NER data has unexpected format:', nerData)
           }
-        } catch (nerError) {
-          console.error('Error loading NER data:', nerError)
+        } else {
+          console.log('No NER data found')
+          setNerData(null)
         }
-      } catch (voiceError) {
-        console.error('Error loading voice data:', voiceError)
-        setVoiceDataError('Failed to load voice data. Please try again later.')
+      } catch (error) {
+        console.error('Error loading NER data:', error)
       }
 
       // Step 1: Get signed URLs for all files
@@ -654,7 +661,45 @@ export default function ProjectDetail() {
         }
       }
       
+      // Also check for NER data when ebook processing is complete
+      const checkForNerData = async () => {
+        try {
+          const { data: { session } } = await supabase.auth.getSession()
+          if (!session) return
+          
+          const nerData = await getNerDataFile({
+            userId: session.user.id,
+            projectId: project.id
+          })
+          
+          console.log('NER data check after intake:', nerData)
+          
+          if (nerData) {
+            console.log('NER data found after intake')
+            // Cast to the correct type and check if it has the expected structure
+            const typedNerData = nerData as unknown as NerDataFromApi;
+            if (typedNerData.book_summary) {
+              setNerData({
+                book_summary: typedNerData.book_summary,
+                chapters: typedNerData.chapters || []
+              });
+            } else if (typedNerData.entities) {
+              // Handle legacy format
+              console.log('Legacy NER data format detected')
+            } else {
+              console.log('NER data has unexpected format:', nerData)
+            }
+          } else {
+            console.log('No NER data found after intake')
+            setNerData(null)
+          }
+        } catch (error) {
+          console.error('Error checking for NER data:', error)
+        }
+      }
+      
       checkForVoiceData()
+      checkForNerData()
     }
   }, [projectStatus?.Ebook_Prep_Status, project])
 
@@ -1110,11 +1155,27 @@ export default function ProjectDetail() {
   
   const processStoryboardGeneration = async () => {
     try {
+      // Close the confirmation dialog immediately
+      setIsStoryboardConfirmOpen(false)
+      
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('No session')
       if (!project) throw new Error('Project not found')
       if (!project.voice_id) throw new Error('Voice not selected')
 
+      // Debug: Test the PLS format
+      await debugPlsFormat()
+      
+      // Debug: Test the PLS format with actual pronunciation corrections
+      if (pronunciationCorrections.length > 0) {
+        await debugPlsFormatWithCorrections(
+          pronunciationCorrections.map(correction => ({
+            originalName: correction.originalName,
+            ipaPronunciation: correction.ipaPronunciation
+          }))
+        )
+      }
+      
       // Extract filename from epub_file_path
       const epubFilename = project.epub_file_path.split('/').pop()
       if (!epubFilename) throw new Error('EPUB filename not found')
@@ -1144,19 +1205,66 @@ export default function ProjectDetail() {
       // Use the voice name from the project instead of the voice ID
       const voiceName = project.voice_name || "Abe"; // Default to "Abe" if voice name not set
       
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 2 -ss`
-      await sendCommand(command)
+      // Create or update pronunciation dictionary if there are corrections
+      let dictionaryParam = ""
+      let dictionaryName = project.pls_dict_name || undefined
       
-      // Close the confirmation dialog
-      setIsStoryboardConfirmOpen(false)
+      if (pronunciationCorrections.length > 0) {
+        // Create or update the pronunciation dictionary
+        toast.info('Creating pronunciation dictionary...')
+        
+        try {
+          const dictionaryResult = await createPronunciationDictionary(
+            session.user.id,
+            project.id,
+            pronunciationCorrections.map(correction => ({
+              originalName: correction.originalName,
+              ipaPronunciation: correction.ipaPronunciation
+            }))
+          )
+          
+          console.log('Dictionary creation result:', dictionaryResult)
+          
+          if (dictionaryResult.created) {
+            toast.success('Pronunciation dictionary created successfully')
+            dictionaryName = dictionaryResult.dictionaryName || undefined
+            
+            // Update the project with the dictionary info
+            const { error: updateError } = await supabase
+              .from('projects')
+              .update({
+                pls_dict_name: dictionaryResult.dictionaryName,
+                pls_dict_file: dictionaryResult.dictionaryFileName
+              })
+              .eq('id', project.id)
+              
+            if (updateError) {
+              console.error('Error updating project with dictionary info:', updateError)
+            }
+          } else {
+            toast.error(`Failed to create pronunciation dictionary: ${dictionaryResult.reason}`)
+          }
+        } catch (error) {
+          console.error('Error creating pronunciation dictionary:', error)
+          toast.error('Failed to create pronunciation dictionary')
+        }
+      }
+      
+      // Check if the project has a pronunciation dictionary
+      if (dictionaryName) {
+        dictionaryParam = ` -pd "${dictionaryName}"`
+      }
+      
+      // Log the dictionary parameter for debugging
+      console.log(`Sending command with dictionary parameter: ${dictionaryParam || 'none'}`)
+      
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -ss`
+      await sendCommand(command)
       
       toast.success('Storyboard generation started. This may take a few minutes.')
     } catch (error) {
       console.error('Error generating storyboard:', error)
       toast.error('Failed to generate storyboard')
-      
-      // Close the confirmation dialog
-      setIsStoryboardConfirmOpen(false)
     }
   }
 
@@ -1193,7 +1301,16 @@ export default function ProjectDetail() {
       const bookTitle = project.book_title || "Walker"; // Use project book_title or default
       
       // Use the voice name from the project instead of hardcoded "Abe"
-      const voiceName = project.voice_name || "Abe"; // Default to "Abe" if voice name not set
+      const voiceName = project.voice_name || "Abe";
+
+      // Use the pronunciation dictionary if it exists
+      let dictionaryParam = ""
+      if (project.pls_dict_name) {
+        dictionaryParam = ` -pd "${project.pls_dict_name}"`
+      }
+
+      // Log the dictionary parameter for debugging
+      console.log(`Sending audiobook command with dictionary parameter: ${dictionaryParam || 'none'}`)
 
       const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 2 -sb`
       await sendCommand(command)
@@ -1552,12 +1669,37 @@ export default function ProjectDetail() {
           const { data: { session } } = await supabase.auth.getSession()
           if (!session) return
           
+          // Save to R2
           await saveJsonToR2<PronunciationCorrection[]>({
             userId: session.user.id,
             projectId: project.id,
             filename: 'pronunciation-corrections.json',
             data: pronunciationCorrections
           })
+          
+          // Update the pronunciation dictionary in Elevenlabs
+          if (project.pls_dict_name) {
+            try {
+              const response = await fetch('/api/elevenlabs-dictionary-update', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  userId: session.user.id,
+                  projectId: project.id,
+                  dictionaryName: project.pls_dict_name,
+                  pronunciationCorrections
+                }),
+              })
+              
+              if (!response.ok) {
+                console.error('Failed to update pronunciation dictionary in Elevenlabs')
+              }
+            } catch (dictError) {
+              console.error('Error updating pronunciation dictionary in Elevenlabs:', dictError)
+            }
+          }
         } catch (error) {
           console.error('Error saving pronunciation corrections to R2:', error)
         }
@@ -1565,15 +1707,51 @@ export default function ProjectDetail() {
     }
     
     savePronunciationCorrections()
-  }, [project?.id, pronunciationCorrections])
+  }, [project?.id, project?.pls_dict_name, pronunciationCorrections])
 
   // Add function to delete a pronunciation correction
   const deletePronunciationCorrection = async (originalName: string) => {
-    // Remove the correction from the state
-    setPronunciationCorrections(prev => prev.filter(c => c.originalName !== originalName))
-    
-    // Show a toast notification
-    toast.success(`Pronunciation correction for "${originalName}" deleted`)
+    try {
+      // Remove the correction from the state
+      setPronunciationCorrections(prev => prev.filter(c => c.originalName !== originalName))
+      
+      // If the project has a pronunciation dictionary, update it
+      if (project?.id && project?.pls_dict_name) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession()
+          if (!session) return
+          
+          // Get the updated corrections (after removing the one to delete)
+          const updatedCorrections = pronunciationCorrections.filter(c => c.originalName !== originalName)
+          
+          // Update the pronunciation dictionary in Elevenlabs
+          const response = await fetch('/api/elevenlabs-dictionary-update', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              userId: session.user.id,
+              projectId: project.id,
+              dictionaryName: project.pls_dict_name,
+              pronunciationCorrections: updatedCorrections
+            }),
+          })
+          
+          if (!response.ok) {
+            console.error('Failed to update pronunciation dictionary in Elevenlabs after deletion')
+          }
+        } catch (dictError) {
+          console.error('Error updating pronunciation dictionary in Elevenlabs after deletion:', dictError)
+        }
+      }
+      
+      // Show a toast notification
+      toast.success(`Pronunciation correction for "${originalName}" deleted`)
+    } catch (error) {
+      console.error('Error deleting pronunciation correction:', error)
+      toast.error('Failed to delete pronunciation correction')
+    }
   }
 
   // Add function to get IPA pronunciation from GPT
@@ -1625,7 +1803,6 @@ export default function ProjectDetail() {
       }
     }
   }
-
   // Add function to confirm IPA for audiobook
   const confirmIpaForAudiobook = (controlType: 'corrected' | 'newName' = 'corrected') => {
     if (controlType === 'corrected' && gptIpaPronunciation) {
@@ -3111,5 +3288,7 @@ export default function ProjectDetail() {
     </div>
   )
 }
+
+
 
 
