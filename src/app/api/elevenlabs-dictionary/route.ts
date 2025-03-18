@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/server/supabase-admin'
 import { createPlsDictionaryContent } from '@/lib/elevenlabs-helper'
+import { saveTextToR2 } from '@/app/actions/storage'
+import { getMasterDictionaryName } from '@/app/actions/pronunciation-dictionary'
+import { addRulesToMasterDictionary } from '@/app/actions/pronunciation-dictionary'
 
 // Function to create a pronunciation dictionary in Elevenlabs
 export async function POST(request: NextRequest) {
@@ -14,51 +17,48 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Use the API key from environment variables
-    const apiKey = process.env.ELEVEN_API_KEY
-    if (!apiKey) {
+    const dictionaryName = await getMasterDictionaryName()
+    const dictionaryFileName = `${dictionaryName}.pls`
+
+    if (!pronunciationCorrections || !Array.isArray(pronunciationCorrections) || pronunciationCorrections.length === 0) {
+      console.log('No pronunciation corrections provided, skipping rule addition')
+      return NextResponse.json({ 
+        success: true, 
+        dictionaryName, 
+        dictionaryFileName,
+        dictionaryId: null,
+        message: 'No pronunciation corrections provided'
+      })
+    }
+
+    // Create PLS content from pronunciation corrections
+    const plsContent = createPlsDictionaryContent(pronunciationCorrections)
+    
+    // Save the PLS content to R2 storage for reference
+    const saveResult = await saveTextToR2({
+      userId,
+      projectId,
+      filename: dictionaryFileName,
+      content: plsContent,
+      contentType: 'application/xml'
+    })
+    
+    if (!saveResult.success) {
+      console.error('Failed to save PLS file to R2')
+    }
+
+    // Add rules to the existing master dictionary
+    const addRulesResult = await addRulesToMasterDictionary(pronunciationCorrections)
+    
+    if (!addRulesResult.success) {
+      console.error('Failed to add rules to master dictionary:', addRulesResult.error)
       return NextResponse.json(
-        { error: 'ElevenLabs API key is not configured' },
+        { error: `Failed to add rules to master dictionary: ${addRulesResult.error}` },
         { status: 500 }
       )
     }
 
-    // Generate dictionary name based on last 4 digits of userId and projectId
-    const userIdSuffix = userId.slice(-4)
-    const projectIdSuffix = projectId.slice(-4)
-    const dictionaryName = `${userIdSuffix}_${projectIdSuffix}_pronunciation_dictionary`
-    const dictionaryFileName = `${dictionaryName}.pls`
-
-    // Create PLS content from pronunciation corrections
-    const plsContent = createPlsDictionaryContent(pronunciationCorrections || [])
-
-    // Make request to ElevenLabs API to create/update the pronunciation dictionary
-    const response = await fetch(
-      'https://api.elevenlabs.io/v1/pronunciation-dictionaries',
-      {
-        method: 'POST',
-        headers: {
-          'xi-api-key': apiKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: dictionaryName,
-          content: plsContent
-        }),
-      }
-    )
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => null)
-      console.error('ElevenLabs API error:', errorData || response.statusText)
-      return NextResponse.json(
-        { error: 'Failed to create pronunciation dictionary' },
-        { status: response.status }
-      )
-    }
-
-    const data = await response.json()
-    console.log('Successfully created pronunciation dictionary:', dictionaryName)
+    console.log('Successfully added pronunciation rules to dictionary:', dictionaryName)
 
     // Update the project in Supabase with the dictionary information
     const { error: updateError } = await supabaseAdmin
@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
       success: true, 
       dictionaryName, 
       dictionaryFileName,
-      dictionaryId: data.pronunciation_dictionary_id || null
+      dictionaryId: addRulesResult.dictionaryId || null
     })
   } catch (error) {
     console.error('Error in ElevenLabs dictionary API route:', error)

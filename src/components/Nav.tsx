@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import LoginSheet from './LoginSheet'
+import Image from 'next/image'
 
 export default function Nav() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
@@ -43,6 +44,13 @@ export default function Nav() {
             {/* Left side links - using flex-start to push to left edge */}
             <div className="flex-1 flex items-center justify-start space-x-8">
               <Link href="/" className="flex items-center">
+                <Image 
+                  src="/api/r2-image?path=audibloom_logo_small-transp.png"
+                  alt="Audibloom Logo"
+                  width={30}
+                  height={30}
+                  className="mr-2"
+                />
                 <span className="font-bold">Audibloom</span>
               </Link>
               {isLoggedIn && (

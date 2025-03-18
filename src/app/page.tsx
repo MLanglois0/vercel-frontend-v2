@@ -49,7 +49,7 @@ export default function Home() {
   return (
     <main className="max-w-2xl mx-auto text-center">
       <Image 
-        src="https://h245f0zpl5ltanyh.public.blob.vercel-storage.com/audibloom_logo-transp-lbu8FBtKMafade7Ru6bkwYrrMSOdBe.png"
+        src="/api/r2-image?path=audibloom_logo-transp.png"
         alt="Audibloom Logo"
         width={500}
         height={300}

@@ -34,7 +34,11 @@ import { Input } from "@/components/ui/input"
 import Image from 'next/image'
 import { Textarea } from "@/components/ui/textarea"
 import { sendCommand } from '@/app/actions/remote-commands'
-import { createPronunciationDictionary, debugPlsFormat, debugPlsFormatWithCorrections } from '@/app/actions/upload'
+import { 
+  getMasterDictionaryName, 
+  addToMasterDictionary, 
+  createMasterPronunciationDictionary
+} from '@/app/actions/pronunciation-dictionary'
 
 interface Project {
   id: string
@@ -303,6 +307,8 @@ export default function ProjectDetail() {
   const [isViewCorrectionsOpen, setIsViewCorrectionsOpen] = useState(false)
   // Add state for storyboard confirmation dialog
   const [isStoryboardConfirmOpen, setIsStoryboardConfirmOpen] = useState(false)
+  
+  const [masterDictionaryName, setMasterDictionaryName] = useState<string>('audibloom_master_dictionary')
   
   const fetchProject = useCallback(async () => {
     try {
@@ -739,6 +745,59 @@ export default function ProjectDetail() {
             // Set a timer to try again in 5 seconds
             setTimeout(() => refreshVoiceData(), 5000)
           }
+
+          // Also load NER data after ebook processing completes
+          try {
+            const nerData = await getNerDataFile({
+              userId: session.user.id,
+              projectId: project.id
+            })
+            
+            console.log('NER data check after ebook completion:', nerData)
+            
+            if (nerData) {
+              console.log('NER data found after ebook completion')
+              // Cast to the correct type and check if it has the expected structure
+              const typedNerData = nerData as unknown as NerDataFromApi;
+              if (typedNerData.book_summary) {
+                setNerData({
+                  book_summary: typedNerData.book_summary,
+                  chapters: typedNerData.chapters || []
+                });
+              } else if (typedNerData.entities) {
+                // Handle legacy format
+                console.log('Legacy NER data format detected')
+              } else {
+                console.log('NER data has unexpected format:', nerData)
+              }
+            } else {
+              console.log('No NER data found after ebook completion')
+              setNerData(null)
+            }
+          } catch (nerError) {
+            console.error('Error loading NER data:', nerError)
+          }
+
+          // Also load pronunciation corrections data
+          try {
+            console.log('Loading pronunciation corrections after ebook completion')
+            const corrections = await getJsonFromR2<PronunciationCorrection[]>({
+              userId: session.user.id,
+              projectId: project.id,
+              filename: 'pronunciation-corrections.json'
+            })
+            
+            if (corrections) {
+              console.log('Pronunciation corrections found:', corrections.length)
+              setPronunciationCorrections(corrections)
+            } else {
+              console.log('No pronunciation corrections found')
+              setPronunciationCorrections([])
+            }
+          } catch (correctionsError) {
+            console.error('Error loading pronunciation corrections:', correctionsError)
+          }
+
         } catch (error) {
           console.error('Error refreshing voice data:', error)
         }
@@ -763,6 +822,18 @@ export default function ProjectDetail() {
     try {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('No session')
+
+      // First, get all pronunciation rules for this project to update the master dictionary
+      const response = await fetch(`/api/master-dictionary?userId=${session.user.id}&projectId=${project.id}`, {
+        method: 'DELETE'
+      })
+      
+      if (!response.ok) {
+        console.error('Error removing entries from master dictionary table')
+        // Continue with deletion even if this fails
+      } else {
+        console.log('Successfully removed pronunciation rules for project from master dictionary')
+      }
 
       // Delete entire project folder
       await deleteProjectFolder(session.user.id, project.id)
@@ -1162,19 +1233,6 @@ export default function ProjectDetail() {
       if (!session) throw new Error('No session')
       if (!project) throw new Error('Project not found')
       if (!project.voice_id) throw new Error('Voice not selected')
-
-      // Debug: Test the PLS format
-      await debugPlsFormat()
-      
-      // Debug: Test the PLS format with actual pronunciation corrections
-      if (pronunciationCorrections.length > 0) {
-        await debugPlsFormatWithCorrections(
-          pronunciationCorrections.map(correction => ({
-            originalName: correction.originalName,
-            ipaPronunciation: correction.ipaPronunciation
-          }))
-        )
-      }
       
       // Extract filename from epub_file_path
       const epubFilename = project.epub_file_path.split('/').pop()
@@ -1199,60 +1257,76 @@ export default function ProjectDetail() {
       await fetchProject()
 
       // Use the author_name and book_title from the project
-      const authorName = project.author_name || "Mike Langlois"; // Default if not set
-      const bookTitle = project.book_title || "Walker"; // Use project book_title or default
+      const authorName = project.author_name || "Mike Langlois";
+      const bookTitle = project.book_title || "Walker";
       
-      // Use the voice name from the project instead of the voice ID
-      const voiceName = project.voice_name || "Abe"; // Default to "Abe" if voice name not set
+      // Use the voice name from the project
+      const voiceName = project.voice_name || "Abe";
       
-      // Create or update pronunciation dictionary if there are corrections
+      // Set the dictionary parameter to use the master dictionary
       let dictionaryParam = ""
-      let dictionaryName = project.pls_dict_name || undefined
       
+      // If there are pronunciation corrections, create/update the master dictionary first
       if (pronunciationCorrections.length > 0) {
-        // Create or update the pronunciation dictionary
-        toast.info('Creating pronunciation dictionary...')
-        
         try {
-          const dictionaryResult = await createPronunciationDictionary(
+          // First, create/update the master pronunciation dictionary in ElevenLabs
+          const result = await createMasterPronunciationDictionary(
             session.user.id,
             project.id,
+            project.project_name,
+            project.book_title,
             pronunciationCorrections.map(correction => ({
               originalName: correction.originalName,
               ipaPronunciation: correction.ipaPronunciation
             }))
           )
           
-          console.log('Dictionary creation result:', dictionaryResult)
-          
-          if (dictionaryResult.created) {
-            toast.success('Pronunciation dictionary created successfully')
-            dictionaryName = dictionaryResult.dictionaryName || undefined
+          if (result.created) {
+            console.log('Master pronunciation dictionary created/updated successfully')
             
-            // Update the project with the dictionary info
+            // Update the project with the dictionary name (for reference)
             const { error: updateError } = await supabase
               .from('projects')
               .update({
-                pls_dict_name: dictionaryResult.dictionaryName,
-                pls_dict_file: dictionaryResult.dictionaryFileName
+                pls_dict_name: masterDictionaryName,
+                pls_dict_file: `${masterDictionaryName}.pls`
               })
               .eq('id', project.id)
-              
+            
             if (updateError) {
               console.error('Error updating project with dictionary info:', updateError)
             }
+            
+            // Then, add the corrections to the Supabase master dictionary table
+            const addResult = await addToMasterDictionary({
+              userId: session.user.id,
+              projectId: project.id,
+              projectName: project.project_name,
+              bookName: project.book_title,
+              pronunciationCorrections: pronunciationCorrections.map(correction => ({
+                originalName: correction.originalName,
+                ipaPronunciation: correction.ipaPronunciation
+              }))
+            })
+            
+            if (!addResult.success) {
+              console.error('Error adding to master dictionary table:', addResult.error)
+              toast.error('Failed to add pronunciation corrections to master dictionary')
+            }
+            
+            // Set the dictionary parameter for the command
+            dictionaryParam = ` -pd "${masterDictionaryName}"`
           } else {
-            toast.error(`Failed to create pronunciation dictionary: ${dictionaryResult.reason}`)
+            console.error('Error creating master pronunciation dictionary:', result.reason)
+            toast.error('Failed to create master pronunciation dictionary')
           }
         } catch (error) {
           console.error('Error creating pronunciation dictionary:', error)
           toast.error('Failed to create pronunciation dictionary')
         }
-      }
-      
-      // Check if the project has a pronunciation dictionary
-      if (dictionaryName) {
-        dictionaryParam = ` -pd "${dictionaryName}"`
+      } else if (project.pls_dict_name) {
+        // If no new corrections but project has a dictionary name, use the master dictionary
+        dictionaryParam = ` -pd "${masterDictionaryName}"`
       }
       
       // Log the dictionary parameter for debugging
@@ -1303,16 +1377,16 @@ export default function ProjectDetail() {
       // Use the voice name from the project instead of hardcoded "Abe"
       const voiceName = project.voice_name || "Abe";
 
-      // Use the pronunciation dictionary if it exists
+      // Use the master pronunciation dictionary
       let dictionaryParam = ""
       if (project.pls_dict_name) {
-        dictionaryParam = ` -pd "${project.pls_dict_name}"`
+        dictionaryParam = ` -pd "${masterDictionaryName}"`
       }
 
       // Log the dictionary parameter for debugging
       console.log(`Sending audiobook command with dictionary parameter: ${dictionaryParam || 'none'}`)
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 2 -sb`
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -sb`
       await sendCommand(command)
       toast.success('Generation started')
     } catch (error) {
@@ -1716,7 +1790,7 @@ export default function ProjectDetail() {
       setPronunciationCorrections(prev => prev.filter(c => c.originalName !== originalName))
       
       // If the project has a pronunciation dictionary, update it
-      if (project?.id && project?.pls_dict_name) {
+      if (project?.id) {
         try {
           const { data: { session } } = await supabase.auth.getSession()
           if (!session) return
@@ -1724,25 +1798,32 @@ export default function ProjectDetail() {
           // Get the updated corrections (after removing the one to delete)
           const updatedCorrections = pronunciationCorrections.filter(c => c.originalName !== originalName)
           
-          // Update the pronunciation dictionary in Elevenlabs
-          const response = await fetch('/api/elevenlabs-dictionary-update', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              userId: session.user.id,
-              projectId: project.id,
-              dictionaryName: project.pls_dict_name,
-              pronunciationCorrections: updatedCorrections
-            }),
+          // Remove the entry from the master dictionary table in Supabase using the API
+          const response = await fetch(`/api/master-dictionary?userId=${session.user.id}&projectId=${project.id}&grapheme=${encodeURIComponent(originalName)}`, {
+            method: 'DELETE'
           })
           
           if (!response.ok) {
-            console.error('Failed to update pronunciation dictionary in Elevenlabs after deletion')
+            console.error('Error removing entry from master dictionary table')
+            return
           }
+          
+          // Update the master dictionary with the remaining rules
+          console.log('Updating master dictionary after removing rule for:', originalName)
+          
+          // Call the server action to update the master dictionary
+          await createMasterPronunciationDictionary(
+            session.user.id,
+            project.id,
+            project.project_name,
+            project.book_title,
+            updatedCorrections.map(correction => ({
+              originalName: correction.originalName,
+              ipaPronunciation: correction.ipaPronunciation
+            }))
+          )
         } catch (dictError) {
-          console.error('Error updating pronunciation dictionary in Elevenlabs after deletion:', dictError)
+          console.error('Error updating pronunciation dictionary after deletion:', dictError)
         }
       }
       
@@ -1898,6 +1979,20 @@ export default function ProjectDetail() {
       toast.success('New name IPA pronunciation confirmed for audiobook')
     }
   }
+
+  // Fetch the master dictionary name when component mounts
+  useEffect(() => {
+    const fetchMasterDictionaryName = async () => {
+      try {
+        const name = await getMasterDictionaryName()
+        setMasterDictionaryName(name)
+      } catch (error) {
+        console.error('Error fetching master dictionary name:', error)
+      }
+    }
+    
+    fetchMasterDictionaryName()
+  }, [])
 
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
