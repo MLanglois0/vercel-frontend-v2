@@ -37,6 +37,7 @@ interface ProjectStatus {
   Ebook_Prep_Status: string;
   Storyboard_Status: string;
   Audiobook_Status: string;
+  Publish_Status: string;
 }
 
 export default function Projects() {

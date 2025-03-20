@@ -146,6 +146,7 @@ export default function CreateAccount() {
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                 placeholder="Create a password"
+                autoComplete="new-password"
               />
             </div>
             
@@ -157,6 +158,7 @@ export default function CreateAccount() {
                 value={formData.confirmPassword}
                 onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
                 placeholder="Confirm your password"
+                autoComplete="new-password"
               />
             </div>
 

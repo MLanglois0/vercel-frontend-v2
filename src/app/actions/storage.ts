@@ -30,6 +30,7 @@ interface ProjectStatus {
   Ebook_Prep_Status: string;
   Storyboard_Status: string;
   Audiobook_Status: string;
+  Publish_Status: string;
 }
 
 // Add a Voice interface
@@ -126,12 +127,11 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
 
     if (!allFiles.length) return []
 
-    // console.log('Base directory files:', baseResponse.Contents?.map(f => f.Key))
-    // console.log('Temp directory files:', tempResponse.Contents?.map(f => f.Key))
-    // console.log('Output directory files:', outputResponse.Contents?.map(f => f.Key))
+    console.log('Refreshing project files...')
 
     const signedUrls = await Promise.all(
       allFiles.map(async (file): Promise<SignedFileResponse | null> => {
+        // Process each file
         if (!file.Key) return null
 
         const fileName = file.Key.split('/').pop() || ''
@@ -147,18 +147,11 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
         if (/\.(jpg|jpeg|png|webp)$/i.test(fileName) || fileName.endsWith('jpgoldset')) {
           type = 'image'
           if (isInTemp) {
-            console.log('Processing temp image file:', fileName)
-            
             // First check for oldset files
             if (fileName.endsWith('jpgoldset')) {
               const oldsetMatch = fileName.match(/image(\d+)\.jpgoldset$/)
               if (oldsetMatch) {
                 number = parseInt(oldsetMatch[1])
-                console.log('🎯 Found jpgoldset file:', {
-                  fileName,
-                  number,
-                  path: file.Key
-                })
               }
             }
             // Then check for saved versions
@@ -178,8 +171,8 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
           }
         } else if (/\.mp3$/.test(fileName)) {
           type = 'audio'
-          const mainMatch = fileName.match(/image(\d+)(?:_\d+)?\.mp3$/)
-          const sbsaveMatch = fileName.match(/image(\d+)_sbsave(?:_\d+)?\.mp3$/)
+          const mainMatch = fileName.match(/audio(\d+)(?:_\d+)?\.mp3$/)
+          const sbsaveMatch = fileName.match(/audio(\d+)_sbsave(?:_\d+)?\.mp3$/)
           
           if (mainMatch?.[1]) {
             number = parseInt(mainMatch[1])
@@ -231,23 +224,9 @@ export async function getSignedImageUrls(userId: string, projectId: string): Pro
     )
 
     const filtered = signedUrls.filter((url): url is SignedFileResponse => url !== null)
-    // console.log('Filtered signed URLs:', filtered.map(f => ({ 
-    //   type: f.type, 
-    //   number: f.number,
-    //   path: f.path, 
-    //   isInTemp: f.path.includes('/temp/')
-    // })))
 
-    // Filter signed files based on file type and path
-    filtered.forEach(file => {
-      const isMatch = file.type === 'image' &&
-        file.path.includes('/temp/') &&
-        (file.path.match(/.*?chapter\d+_\d+_image\d+(?:_sbsave\d+)?\.jpg$/) || 
-         file.path.match(/.*?chapter\d+_\d+_image\d+\.jpgoldset$/))
-      if (isMatch) console.log('Matched storyboard file:', file.path)
-    })
-
-    return filtered  // Return all files instead of just storyboard files
+    console.log('Project files refreshed successfully')
+    return filtered
   } catch (error) {
     console.error('Error generating signed URLs:', error)
     throw error
@@ -959,6 +938,25 @@ export async function getJsonFromR2<T>({
   } catch (error) {
     console.error('Error getting JSON from R2:', error)
     return null
+  }
+}
+
+// Add new function to get a signed URL for the HLS stream
+export async function getSignedStreamUrl(path: string): Promise<string> {
+  try {
+    // Create a get command for the object
+    const getCommand = new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: path,
+    })
+    
+    // Generate a signed URL with an expiration of 1 hour
+    const url = await getSignedUrl(r2Client, getCommand, { expiresIn: 3600 })
+    
+    return url
+  } catch (error) {
+    console.error('Error generating signed URL for stream:', error)
+    throw error
   }
 }
 

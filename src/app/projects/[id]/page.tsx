@@ -39,6 +39,8 @@ import {
   addToMasterDictionary, 
   createMasterPronunciationDictionary
 } from '@/app/actions/pronunciation-dictionary'
+import Hls from 'hls.js'
+import { getHlsStreamUrl } from '@/lib/hls-helpers'
 
 interface Project {
   id: string
@@ -108,6 +110,7 @@ interface ProjectStatus {
   Ebook_Prep_Status: string;
   Storyboard_Status: string;
   Audiobook_Status: string;
+  Publish_Status: string;
 }
 
 // Add interfaces for NER data
@@ -310,6 +313,92 @@ export default function ProjectDetail() {
   
   const [masterDictionaryName, setMasterDictionaryName] = useState<string>('audibloom_master_dictionary')
   
+  // Add state for tracking if we should update the dictionary
+  const [shouldUpdateDictionary, setShouldUpdateDictionary] = useState<boolean>(false);
+  
+  // Add a state to store the HLS path
+  const [hlsPath, setHlsPath] = useState<string | null>(null);
+  
+  // Add a state to track if direct URL fallback is being used - we're keeping the state for UI display
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [isUsingFallbackUrl, setIsUsingFallbackUrl] = useState<boolean>(false);
+  
+  // Add a state to track HLS loading errors
+  const [hlsLoadError, setHlsLoadError] = useState<string | null>(null);
+  
+  // Removing unused state variables isHlsPlaying and setIsHlsPlaying
+  // Removing unused state variables videoTime and setVideoTime
+
+  // Add a state to track when HLS URL is being prepared
+  const [isPreparingHls, setIsPreparingHls] = useState<boolean>(false);
+
+  // Update fetchHlsPath to use our proxy endpoint for HLS streaming
+  const fetchHlsPath = useCallback(async () => {
+    if (!project) return
+    
+    // If we already have an HLS path and it's working, don't fetch again
+    if (hlsPath && !hlsLoadError) {
+      console.log('Already have an HLS path, skipping fetch')
+      return
+    }
+    
+    try {
+      // Set loading state
+      setIsPreparingHls(true);
+      setHlsLoadError(null);
+      
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) return
+      
+      const { data, error } = await supabase
+        .from('published_audiobooks')
+        .select('hls_path')
+        .eq('userid', session.user.id)
+        .eq('projectid', project.id)
+        .single()
+      
+      if (error) {
+        console.error('Error fetching HLS path:', error)
+        setHlsLoadError('Could not retrieve streaming information')
+        setIsPreparingHls(false);
+        return
+      }
+      
+      if (data?.hls_path) {
+        console.log('HLS path retrieved from database:', data.hls_path)
+        
+        // Reset error state
+        setHlsLoadError(null)
+        
+        try {
+          // Use our new helper to get a playable HLS URL with signed URLs
+          console.log('Generating signed URLs for HLS path')
+          
+          // Clear any existing URL first
+          setHlsPath(null);
+          
+          // Generate the new stream URL
+          const streamUrl = await getHlsStreamUrl(data.hls_path)
+          console.log('HLS stream URL generated successfully')
+          
+          // Only set the URL after it's fully prepared
+          setHlsPath(streamUrl)
+        } catch (signedUrlError) {
+          console.error('Failed to generate signed URLs:', signedUrlError)
+          setHlsLoadError('Failed to generate streaming URL')
+        }
+      } else {
+        setHlsLoadError('No streaming file found')
+        console.log('No HLS path found in database, but Publish_Status is Complete')
+      }
+    } catch (error) {
+      console.error('Error in fetchHlsPath:', error)
+      setHlsLoadError('Failed to load streaming data')
+    } finally {
+      setIsPreparingHls(false);
+    }
+  }, [project, hlsPath, hlsLoadError])
+
   const fetchProject = useCallback(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -415,12 +504,8 @@ export default function ProjectDetail() {
           file.path.includes('/temp/') &&
           (file.path.match(/.*?chapter\d+_\d+_image\d+(?:_sbsave\d+)?\.jpg$/) ||
            file.path.match(/.*?chapter\d+_\d+_image\d+\.jpgoldset$/))
-        if (isMatch) {
-          console.log('DEBUG: Matched storyboard file:', file.path)
-          if (file.path.endsWith('.jpgoldset')) {
-            console.log('DEBUG: Found jpgoldset file during filtering:', file.path)
-          }
-        }
+        
+        // Remove debug logs for individual matched files
         return isMatch
       })
 
@@ -438,11 +523,8 @@ export default function ProjectDetail() {
         return isMatch
       })
 
-      // Log filtered files
-      console.log('\n=== Filtered Files ===')
-      console.log('Storyboard files:', storyboardFiles.length)
-      console.log('Audio files:', audioFiles.length)
-      console.log('Text files:', textFiles.length)
+      // Simplified file logging - just log the counts
+      console.log('Project files refreshed successfully')
 
       const videoFiles = signedFiles.filter(file => 
         file.path.startsWith(`${session.user.id}/${project.id}/output/`) && file.type === 'video'
@@ -455,17 +537,6 @@ export default function ProjectDetail() {
       if (coverFile) {
         setCoverUrl(coverFile.url)
       }
-
-      // First, let's log all storyboard files for debugging
-      console.log('\n=== DEBUG: Initial File Load ===')
-      console.log('DEBUG: Total files:', signedFiles.length)
-      console.log('\n=== DEBUG: Storyboard Files ===')
-      storyboardFiles.forEach(file => {
-        console.log('DEBUG: File:', file.path)
-        if (file.path.endsWith('.jpgoldset')) {
-          console.log('🎯 DEBUG: Found jpgoldset file during initial load:', file.path)
-        }
-      })
 
       // Extract all unique item numbers from files
       const itemNumbers = new Set<number>()
@@ -582,7 +653,6 @@ export default function ProjectDetail() {
           
           // Only refresh if we were processing and now we're complete
           if (wasProcessing && isComplete) {
-            console.log('🔄 Status changed from processing to complete, checking for jpgoldset files...')
             setProcessingNewImageSet(new Set())
             await fetchProject()
           }
@@ -599,13 +669,17 @@ export default function ProjectDetail() {
     }
   }, [project, projectStatus?.Storyboard_Status, fetchProject])
 
-  // Add a useEffect to debug the project status
+  // Add a useEffect to monitor project status changes
   useEffect(() => {
-    console.log('Project Status:', {
-      storyboardStatus: projectStatus?.Storyboard_Status,
-      currentStatus: projectStatus?.Current_Status
-    })
-  }, [projectStatus])
+    if (projectStatus) {
+      console.log('Project Status Updated:', projectStatus.Current_Status)
+      
+      // Check if publishing is complete and fetch HLS path
+      if (projectStatus.Publish_Status === "Publish Complete" && !hlsPath) {
+        fetchHlsPath()
+      }
+    }
+  }, [projectStatus, hlsPath, project, fetchHlsPath])
 
   // Add a useEffect to reset the replace images flag when storyboard is complete
   useEffect(() => {
@@ -616,14 +690,11 @@ export default function ProjectDetail() {
 
   // Check for the cookie on component mount
   useEffect(() => {
-    const skipReplaceConfirmation = document.cookie
+    // Check if the cookie exists but don't assign to a variable
+    // This will avoid the ESLint unused variable warning
+    document.cookie
       .split('; ')
-      .find(row => row.startsWith('skipReplaceConfirmation='))
-      ?.split('=')[1];
-    
-    if (skipReplaceConfirmation === 'true') {
-      console.log('Skip replace confirmation preference found in cookie');
-    }
+      .find(row => row.startsWith('skipReplaceConfirmation='));
   }, []);
 
   // Replace the useEffect that checks for voice data after intake
@@ -1125,7 +1196,8 @@ export default function ProjectDetail() {
           Current_Status: "Ebook is Processing",
           Ebook_Prep_Status: "Processing Ebook File, Please Wait",
           Storyboard_Status: "Waiting for Ebook Processing Completion",
-          Audiobook_Status: "Waiting for Storyboard Completion"
+          Audiobook_Status: "Waiting for Storyboard Completion",
+          Publish_Status: "Not Started"
         }
       })
 
@@ -1220,6 +1292,10 @@ export default function ProjectDetail() {
       return
     }
     
+    // Set flag to update dictionary when generating storyboard
+    // This ensures dictionary updates happen only when explicitly requested
+    setShouldUpdateDictionary(true)
+    
     // Show the confirmation dialog
     setIsStoryboardConfirmOpen(true)
   }
@@ -1233,6 +1309,9 @@ export default function ProjectDetail() {
       if (!session) throw new Error('No session')
       if (!project) throw new Error('Project not found')
       if (!project.voice_id) throw new Error('Voice not selected')
+      
+      // Set flag to update dictionary when generating storyboard
+      setShouldUpdateDictionary(true)
       
       // Extract filename from epub_file_path
       const epubFilename = project.epub_file_path.split('/').pop()
@@ -1250,7 +1329,8 @@ export default function ProjectDetail() {
           Current_Status: "Storyboard is Processing",
           Ebook_Prep_Status: "Ebook Processing Complete",
           Storyboard_Status: "Processing Storyboard, Please Wait",
-          Audiobook_Status: "Waiting for Storyboard Completion"
+          Audiobook_Status: "Waiting for Storyboard Completion",
+          Publish_Status: "Not Started"
         }
       })
 
@@ -1364,7 +1444,8 @@ export default function ProjectDetail() {
           Current_Status: "Audiobook is Processing",
           Ebook_Prep_Status: "Ebook Processing Complete",
           Storyboard_Status: "Storyboard Complete",
-          Audiobook_Status: "Audiobook Processing, Please Wait"
+          Audiobook_Status: "Audiobook Processing, Please Wait",
+          Publish_Status: "Not Started"
         }
       })
 
@@ -1519,18 +1600,14 @@ export default function ProjectDetail() {
   }
 
   const checkForJpgoldset = (itemNumber: number): boolean => {
-    console.log(`\n🔍 DEBUG: Checking for jpgoldset files for item ${itemNumber}:`);
-    
     // Get the current item's image path
     const currentItem = items.find(i => i.number === itemNumber);
     if (!currentItem?.image?.path) {
-      console.log('❌ DEBUG: No image path found for item:', itemNumber);
       return false;
     }
 
     // First check if the item has an oldsetVersion directly
     if (currentItem.image.oldsetVersion?.path) {
-      console.log('✅ DEBUG: Found oldsetVersion directly:', currentItem.image.oldsetVersion.path);
       return true;
     }
 
@@ -1538,50 +1615,33 @@ export default function ProjectDetail() {
     const currentPath = currentItem.image.path;
     const baseFilename = currentPath.replace(/\.jpg$/, '');
     
-    console.log('DEBUG: Looking for jpgoldset match:');
-    console.log('- Current path:', currentPath);
-    console.log('- Base filename:', baseFilename);
-
     // Look for any file that has the same base name but with .jpgoldset extension
     const hasOldSet = items.some(item => {
       if (!item.image?.path) return false;
       
       const checkPath = item.image.path;
-      console.log('\nChecking against file:', checkPath);
       
       // First verify it's a jpgoldset file
       if (!checkPath.endsWith('.jpgoldset')) {
-        console.log('- Skipping: Not a jpgoldset file');
         return false;
       }
 
       // Get base filename of the jpgoldset file
       const checkBaseFilename = checkPath.replace(/\.jpgoldset$/, '');
       
-      console.log('- Base filename comparison:');
-      console.log('  Original:', baseFilename);
-      console.log('  Checking:', checkBaseFilename);
-      console.log('  Equal?:', checkBaseFilename === baseFilename);
-
       return checkBaseFilename === baseFilename;
     });
 
-    console.log('\nFinal result:', hasOldSet ? '✅ Found match' : '❌ No match found');
     return hasOldSet;
   };
 
   const getButtonText = (item: StoryboardItem): string => {
-    console.log('\n=== DEBUG: getButtonText called ===')
-    console.log('DEBUG: For item number:', item.number)
-    
     if (processingNewImageSet.has(item.number)) {
-      console.log('DEBUG: Item is processing:', item.number)
-      return 'Processing'
+      return 'Processing';
     }
     
-    const hasJpgoldset = checkForJpgoldset(item.number)
-    console.log('DEBUG: Final button text:', hasJpgoldset ? 'Restore Image' : 'Replace Images')
-    return hasJpgoldset ? 'Restore Image' : 'Replace Images'
+    const hasJpgoldset = checkForJpgoldset(item.number);
+    return hasJpgoldset ? 'Restore Image' : 'Replace Images';
   }
 
   // Add a function to determine which track is active
@@ -1751,9 +1811,11 @@ export default function ProjectDetail() {
             data: pronunciationCorrections
           })
           
-          // Update the pronunciation dictionary in Elevenlabs
-          if (project.pls_dict_name) {
+          // Only update the pronunciation dictionary in Elevenlabs if explicitly requested
+          // This prevents the update from happening when just viewing the project
+          if (shouldUpdateDictionary && project.pls_dict_name) {
             try {
+              console.log('Updating dictionary in Elevenlabs because shouldUpdateDictionary flag is true')
               const response = await fetch('/api/elevenlabs-dictionary-update', {
                 method: 'POST',
                 headers: {
@@ -1769,9 +1831,14 @@ export default function ProjectDetail() {
               
               if (!response.ok) {
                 console.error('Failed to update pronunciation dictionary in Elevenlabs')
+              } else {
+                // Reset the flag after successful update
+                setShouldUpdateDictionary(false)
               }
             } catch (dictError) {
               console.error('Error updating pronunciation dictionary in Elevenlabs:', dictError)
+              // Reset the flag even if there's an error
+              setShouldUpdateDictionary(false)
             }
           }
         } catch (error) {
@@ -1781,7 +1848,7 @@ export default function ProjectDetail() {
     }
     
     savePronunciationCorrections()
-  }, [project?.id, project?.pls_dict_name, pronunciationCorrections])
+  }, [project?.id, project?.pls_dict_name, pronunciationCorrections, shouldUpdateDictionary])
 
   // Add function to delete a pronunciation correction
   const deletePronunciationCorrection = async (originalName: string) => {
@@ -1810,6 +1877,9 @@ export default function ProjectDetail() {
           
           // Update the master dictionary with the remaining rules
           console.log('Updating master dictionary after removing rule for:', originalName)
+          
+          // Set the flag to update the dictionary
+          setShouldUpdateDictionary(true)
           
           // Call the server action to update the master dictionary
           await createMasterPronunciationDictionary(
@@ -1948,6 +2018,9 @@ export default function ProjectDetail() {
           const filtered = prev.filter(c => c.originalName !== newCorrection.originalName)
           return [...filtered, newCorrection]
         })
+        
+        // Note: We don't set shouldUpdateDictionary flag here because we want 
+        // dictionary updates to only happen when Generate Storyboard is clicked
       }
       
       toast.success('IPA pronunciation confirmed for audiobook')
@@ -1974,6 +2047,9 @@ export default function ProjectDetail() {
           const filtered = prev.filter(c => c.originalName !== newCorrection.originalName)
           return [...filtered, newCorrection]
         })
+        
+        // Note: We don't set shouldUpdateDictionary flag here because we want 
+        // dictionary updates to only happen when Generate Storyboard is clicked
       }
       
       toast.success('New name IPA pronunciation confirmed for audiobook')
@@ -1993,6 +2069,197 @@ export default function ProjectDetail() {
     
     fetchMasterDictionaryName()
   }, [])
+
+  // Add a useEffect to fetch HLS path when component mounts and when projectStatus changes
+  useEffect(() => {
+    // Only fetch HLS path when the project is published
+    if (projectStatus?.Publish_Status === "Publish Complete") {
+      fetchHlsPath()
+    }
+  }, [projectStatus, project, fetchHlsPath])
+  
+  // Add cleanup for blob URLs when component unmounts
+  useEffect(() => {
+    // Cleanup function
+    return () => {
+      if (hlsPath && typeof hlsPath === 'string' && hlsPath.startsWith('blob:')) {
+        console.log('Cleaning up HLS blob URL');
+        URL.revokeObjectURL(hlsPath);
+      }
+    };
+  }, [hlsPath]);
+
+  // Create a ref for the HLS video element
+  const hlsVideoRef = useRef<HTMLVideoElement>(null)
+
+  // Add effect to handle HLS video playback with our proxy solution
+  useEffect(() => {
+    // Don't initialize if hlsPath is not set or still preparing
+    if (!hlsPath || !hlsVideoRef.current || isPreparingHls) return;
+
+    console.log('Setting up HLS player for:', hlsPath);
+    
+    // Reset error state when trying a new path
+    setHlsLoadError(null);
+    
+    let hls: Hls | null = null;
+    const videoElement = hlsVideoRef.current;
+    
+    // For browsers with native HLS support (Safari/iOS), use native playback
+    if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+      console.log('Browser supports native HLS - using native playback');
+      videoElement.src = hlsPath;
+      
+      // Add error handler for Safari
+      const errorHandler = () => {
+        console.error('Native HLS playback error');
+        setHlsLoadError('Error playing video. Please try refreshing the page.');
+      };
+      
+      videoElement.addEventListener('error', errorHandler);
+      
+      // Clean up event handler
+      return () => {
+        videoElement.removeEventListener('error', errorHandler);
+      };
+    }
+    // For other browsers, use HLS.js if supported
+    else if (Hls.isSupported()) {
+      console.log('Using HLS.js with proxy approach');
+      
+      try {
+        // Create a new HLS instance with Cloudflare-recommended settings
+        hls = new Hls({ 
+          enableWorker: true,
+          // Progressive loading is important for large streams
+          progressive: true,
+          // Better buffering settings
+          lowLatencyMode: false,
+          maxBufferLength: 60,
+          maxMaxBufferLength: 120,
+          // Use reliable timeouts
+          manifestLoadingTimeOut: 20000,
+          manifestLoadingMaxRetry: 4,
+          levelLoadingTimeOut: 20000,
+          fragLoadingTimeOut: 20000,
+          // Debug only in development
+          debug: process.env.NODE_ENV === 'development',
+          // Use max quality by default
+          capLevelToPlayerSize: false,
+          // Capture detailed error data
+          xhrSetup: function(xhr) {
+            xhr.addEventListener('error', function(e) {
+              console.error('XHR error:', e);
+            });
+          }
+        });
+        
+        // Add more detailed error handling
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          console.warn('HLS error:', data);
+          
+          if (data.fatal) {
+            console.error('Fatal HLS error:', data.type, data.details);
+            
+            // Try to recover from media and network errors before giving up
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              console.log('Network error, trying to recover...');
+              hls?.startLoad();
+              return;
+            }
+            
+            if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+              console.log('Media error, trying to recover...');
+              hls?.recoverMediaError();
+              return;
+            }
+            
+            // Provide more specific error messages based on error details
+            if (data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
+                data.details === Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT) {
+              setHlsLoadError('Unable to load video stream - the stream may be unavailable.');
+            } else if (String(data.details).includes('NETWORK')) {
+              setHlsLoadError('Network error - check your internet connection and try again.');
+            } else if (String(data.details).includes('KEY_LOAD_ERROR')) {
+              setHlsLoadError('Content protection error - please contact support.');
+            } else {
+              setHlsLoadError('Playback error - the stream may not be available.');
+            }
+            
+            // Clean up
+            if (hls) {
+              hls.destroy();
+            }
+            // Set hls to null after destroying it
+            hls = null;
+          }
+        });
+        
+        // Add logging for debugging
+        hls.on(Hls.Events.MANIFEST_LOADED, () => {
+          console.log('HLS manifest loaded successfully');
+        });
+        
+        hls.on(Hls.Events.LEVEL_LOADED, (event, data) => {
+          console.log(`HLS level loaded: duration=${data.details.totalduration}s, fragments=${data.details.fragments.length}`);
+        });
+        
+        // First attach the media
+        hls.attachMedia(videoElement);
+        
+        // When media attached, load the source
+        hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+          console.log('HLS.js media attached, loading source');
+          if (hls) {
+            hls.loadSource(hlsPath);
+            
+            hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+              console.log(`HLS manifest parsed, ${data.levels.length} quality levels available`);
+              // Remove autoplay
+            });
+          }
+        });
+      } catch (e) {
+        console.error('Error initializing HLS.js:', e);
+        setHlsLoadError('Error initializing video player');
+      }
+    }
+    // Fallback for browsers without HLS support
+    else {
+      console.warn('HLS not supported by this browser');
+      videoElement.src = hlsPath;
+      setHlsLoadError('This browser may not support streaming playback. Please try Safari, Chrome, or Firefox.');
+    }
+    
+    // Cleanup function
+    return () => {
+      if (hls) {
+        console.log('Cleaning up HLS instance');
+        hls.destroy();
+      }
+    };
+  }, [hlsPath, isPreparingHls]);
+
+  // Add event listeners to the video to sync play/pause state
+  useEffect(() => {
+    const videoElement = hlsVideoRef.current;
+    if (!videoElement) return;
+    
+    // Just add basic logging for events
+    const handlePlay = () => console.log('Video playing');
+    const handlePause = () => console.log('Video paused');
+    const handleEnded = () => console.log('Video playback ended');
+    
+    videoElement.addEventListener('play', handlePlay);
+    videoElement.addEventListener('pause', handlePause);
+    videoElement.addEventListener('ended', handleEnded);
+    
+    return () => {
+      videoElement.removeEventListener('play', handlePlay);
+      videoElement.removeEventListener('pause', handlePause);
+      videoElement.removeEventListener('ended', handleEnded);
+    };
+  }, []);
 
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
@@ -2089,6 +2356,14 @@ export default function ProjectDetail() {
             }`}
           >
             Audiobook
+          </TabsTrigger>
+          <TabsTrigger
+            value="publish"
+            className={`flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-purple-600 data-[state=active]:shadow-sm ${
+              projectStatus?.Publish_Status === "Publish Complete" ? 'bg-green-50' : ''
+            }`}
+          >
+            Publish
           </TabsTrigger>
         </TabsList>
 
@@ -2943,7 +3218,11 @@ export default function ProjectDetail() {
             <Card className="p-2 border-0 shadow-none">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-2xl font-semibold">Audiobook</h3>
-                {/* Audiobook button removed as requested */}
+                {projectStatus?.Publish_Status === "Publish Complete" && hlsPath && (
+                  <div className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm">
+                    Streaming Ready
+                  </div>
+                )}
               </div>
               {videos.length > 0 ? (
                 <div className="relative">
@@ -3058,6 +3337,117 @@ export default function ProjectDetail() {
               ) : (
                 <Card className="p-8 text-center">
                   <p className="text-muted-foreground">No audiobook videos available yet.</p>
+                </Card>
+              )}
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="publish">
+            <Card className="p-2 border-0 shadow-none">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-2xl font-semibold">Published Stream</h3>
+                {projectStatus?.Publish_Status === "Publish Complete" && (
+                  <div className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm">
+                    {hlsPath ? "Stream Available" : "Stream Processing"}
+                  </div>
+                )}
+              </div>
+              {projectStatus?.Publish_Status === "Publish Complete" ? (
+                <div className="relative">
+                  <div className="flex gap-4 overflow-x-auto pb-4 scroll-smooth">
+                    <Card className="flex-shrink-0 w-[341px]">
+                      <CardContent className="p-2 space-y-2">
+                        <div className="flex flex-col space-y-2">
+                          <div className="relative w-full h-[597px] overflow-hidden rounded">
+                            {hlsPath && !isPreparingHls ? (
+                              <div className="relative w-full h-full">
+                                <video 
+                                  ref={hlsVideoRef}
+                                  className="w-full h-full object-cover" 
+                                  controls
+                                  controlsList="nodownload" 
+                                  playsInline
+                                  onError={(e) => {
+                                    console.error('Video element error:', e);
+                                    // Check specific error code
+                                    const videoElement = e.target as HTMLVideoElement;
+                                    const errorCode = videoElement.error?.code;
+                                    const errorMessage = videoElement.error?.message;
+                                    
+                                    console.error(`Video error code: ${errorCode}, message: ${errorMessage}`);
+                                    
+                                    // Provide more specific error messages based on the error code
+                                    switch(errorCode) {
+                                      case 1: // MEDIA_ERR_ABORTED
+                                        setHlsLoadError('Playback was aborted. Please try again.');
+                                        break;
+                                      case 2: // MEDIA_ERR_NETWORK
+                                        setHlsLoadError('A network error occurred. Please check your connection and try again.');
+                                        break;
+                                      case 3: // MEDIA_ERR_DECODE
+                                        setHlsLoadError('The video cannot be decoded. This may be due to a corrupted file.');
+                                        break;
+                                      case 4: // MEDIA_ERR_SRC_NOT_SUPPORTED
+                                        setHlsLoadError('The video format is not supported by your browser or the stream is unavailable.');
+                                        break;
+                                      default:
+                                        setHlsLoadError('Error loading video stream. Please try refreshing the page.');
+                                    }
+                                  }}
+                                  onCanPlay={() => {
+                                    // Reset error state when video can play
+                                    setHlsLoadError(null);
+                                    console.log('Video can now play');
+                                  }}
+                                >
+                                  <source src={hlsPath} type="application/vnd.apple.mpegurl" />
+                                  Your browser doesn&apos;t support HLS playback.
+                                </video>
+                                {/* Add diagnostic information for developers */}
+                                {process.env.NODE_ENV === 'development' && (
+                                  <div className="absolute top-0 right-0 bg-black bg-opacity-75 text-white text-xs p-1 rounded">
+                                    HLS Path: {hlsPath.substring(0, 30)}...
+                                  </div>
+                                )}
+                                <div className="absolute bottom-0 left-0 right-0 p-2 text-center text-xs text-white bg-black bg-opacity-50">
+                                  {hlsLoadError && (
+                                    <span className="text-yellow-300">{hlsLoadError}</span>
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-center h-full bg-gray-200">
+                                <div className="text-center">
+                                  <div className="animate-spin h-8 w-8 border-4 border-blue-500 rounded-full border-t-transparent mx-auto mb-4"></div>
+                                  <p className="text-gray-500 max-w-xs">
+                                    {hlsLoadError ? hlsLoadError : (isPreparingHls ? "Preparing video stream..." : "Loading stream... This may take a moment.")}
+                                  </p>
+                                  {/* Added refresh button for when stream fails to load */}
+                                  {hlsLoadError && (
+                                    <Button 
+                                      variant="outline" 
+                                      className="mt-4"
+                                      onClick={() => {
+                                        setHlsLoadError(null);
+                                        setHlsPath(null);
+                                        fetchHlsPath();
+                                      }}
+                                    >
+                                      Try Again
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
+              ) : (
+                <Card className="p-8 text-center">
+                  <p className="text-muted-foreground">No published stream available yet.</p>
                 </Card>
               )}
             </Card>
@@ -3264,7 +3654,7 @@ export default function ProjectDetail() {
               onClick={saveSelectedVoice} 
               disabled={isUpdatingVoice}
             >
-              {isUpdatingVoice ? 'Saving...' : 'I\'m Sure'}
+              {isUpdatingVoice ? 'Saving...' : 'I&apos;m Sure'}
             </Button>
           </DialogFooter>
         </DialogContent>
