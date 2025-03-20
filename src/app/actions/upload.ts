@@ -282,7 +282,7 @@ export async function uploadFile(formData: FormData, userId: string) {
         Ebook_Prep_Status: "Ready to process ebook",
         Storyboard_Status: "Waiting for Ebook Processing Completion",
         Audiobook_Status: "Waiting for Storyboard Completion",
-        Publish_Status: "Not Started"
+        Proof_Status: "Not Started"
       }
     })
 

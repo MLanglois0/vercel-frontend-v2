@@ -109,8 +109,8 @@ interface ProjectStatus {
   Current_Status: string;
   Ebook_Prep_Status: string;
   Storyboard_Status: string;
+  Proof_Status: string;
   Audiobook_Status: string;
-  Publish_Status: string;
 }
 
 // Add interfaces for NER data
@@ -156,12 +156,12 @@ function getInitialTab(status: ProjectStatus | null) {
 
   const isIntakeComplete = status.Ebook_Prep_Status === "Ebook Processing Complete"
   const isStoryboardComplete = status.Storyboard_Status === "Storyboard Complete"
-  const isAudiobookComplete = status.Audiobook_Status === "Audiobook Complete"
+  const isProofsComplete = status.Proof_Status === "Proofs Complete"
 
-  // New behavior: Land on the tab that has a complete status, in this order: Intake, Storyboard, Audiobook
+  // New behavior: Land on the tab that has a complete status, in this order: Intake, Storyboard, Proofs
   // If all are complete, prioritize Audiobook
-  if (isIntakeComplete && isStoryboardComplete && isAudiobookComplete) {
-    return 'audiobook'
+  if (isIntakeComplete && isStoryboardComplete && isProofsComplete) {
+    return 'audiobook'  // Return the audiobook tab (previously publish)
   }
   
   // If only ebook and storyboard are complete, land on storyboard
@@ -213,15 +213,17 @@ function getStoryboardButtonState(status: string | undefined, hasVoiceSelected: 
 function getAudiobookButtonState(status: string | undefined) {
   switch (status) {
     case "Ready to Process Audiobook":
-      return { enabled: true, label: "Generate Audiobook" }
+      return { enabled: true, label: "Generate Proofs" }
+    case "Ready to Process Proofs":
+      return { enabled: true, label: "Generate Proofs" }
     case "Waiting for Storyboard Completion":
-      return { enabled: false, label: "Generate Audiobook" }
+      return { enabled: false, label: "Generate Proofs" }
     case "Audiobook Processing, Please Wait":
-      return { enabled: false, label: "Audiobook Processing..." }
-    case "Audiobook Complete":
-      return { enabled: false, label: "Audiobook Complete" }
+      return { enabled: false, label: "Processing Proofs..." }
+    case "Proofs Complete":
+      return { enabled: false, label: "Proofs Complete" }
     default:
-      return { enabled: false, label: "Generate Audiobook" }
+      return { enabled: false, label: "Generate Proofs" }
   }
 }
 
@@ -319,16 +321,9 @@ export default function ProjectDetail() {
   // Add a state to store the HLS path
   const [hlsPath, setHlsPath] = useState<string | null>(null);
   
-  // Add a state to track if direct URL fallback is being used - we're keeping the state for UI display
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [isUsingFallbackUrl, setIsUsingFallbackUrl] = useState<boolean>(false);
-  
   // Add a state to track HLS loading errors
   const [hlsLoadError, setHlsLoadError] = useState<string | null>(null);
   
-  // Removing unused state variables isHlsPlaying and setIsHlsPlaying
-  // Removing unused state variables videoTime and setVideoTime
-
   // Add a state to track when HLS URL is being prepared
   const [isPreparingHls, setIsPreparingHls] = useState<boolean>(false);
 
@@ -338,7 +333,6 @@ export default function ProjectDetail() {
     
     // If we already have an HLS path and it's working, don't fetch again
     if (hlsPath && !hlsLoadError) {
-      console.log('Already have an HLS path, skipping fetch')
       return
     }
     
@@ -365,7 +359,7 @@ export default function ProjectDetail() {
       }
       
       if (data?.hls_path) {
-        console.log('HLS path retrieved from database:', data.hls_path)
+        console.log('HLS path retrieved from database')
         
         // Reset error state
         setHlsLoadError(null)
@@ -389,7 +383,7 @@ export default function ProjectDetail() {
         }
       } else {
         setHlsLoadError('No streaming file found')
-        console.log('No HLS path found in database, but Publish_Status is Complete')
+        console.log('No HLS path found in database, but Audiobook_Status is Complete')
       }
     } catch (error) {
       console.error('Error in fetchHlsPath:', error)
@@ -626,14 +620,15 @@ export default function ProjectDetail() {
     fetchProject()
   }, [fetchProject])
 
-  // Update polling to start after initial fetch
+  // Update polling to start after initial fetch with proper cleanup
   useEffect(() => {
     if (!project) return
 
     let isPolling = true // Add flag to prevent race conditions
+    let pollingInterval: NodeJS.Timeout | null = null
 
     // Start polling every 5 seconds
-    const interval = setInterval(async () => {
+    pollingInterval = setInterval(async () => {
       if (!isPolling) return
 
       try {
@@ -665,7 +660,9 @@ export default function ProjectDetail() {
     // Cleanup on unmount or when project changes
     return () => {
       isPolling = false
-      clearInterval(interval)
+      if (pollingInterval) {
+        clearInterval(pollingInterval)
+      }
     }
   }, [project, projectStatus?.Storyboard_Status, fetchProject])
 
@@ -674,12 +671,89 @@ export default function ProjectDetail() {
     if (projectStatus) {
       console.log('Project Status Updated:', projectStatus.Current_Status)
       
-      // Check if publishing is complete and fetch HLS path
-      if (projectStatus.Publish_Status === "Publish Complete" && !hlsPath) {
+      // Check if audiobook is complete and fetch HLS path
+      if (projectStatus.Audiobook_Status === "Audiobook Complete" && !hlsPath) {
         fetchHlsPath()
       }
     }
   }, [projectStatus, hlsPath, project, fetchHlsPath])
+  
+  // Helper function to handle voice and NER data loading
+  const loadVoiceAndNerData = useCallback(async (userId: string, projectId: string) => {
+    try {
+      setVoiceDataError(null)
+      
+      // Load voice data
+      const voiceData = await getVoiceDataFile({
+        userId,
+        projectId
+      })
+      
+      if (voiceData?.voices && Array.isArray(voiceData.voices) && voiceData.voices.length > 0) {
+        setVoices(voiceData.voices)
+        // Set default selected voice if available
+        if (project?.voice_id && voiceData.voices.some(v => v.voice_id === project.voice_id)) {
+          // If project has a saved voice_id and it exists in the available voices, use it
+          setSelectedVoice(project.voice_id)
+        } else {
+          // Otherwise use the first voice
+          setSelectedVoice(voiceData.voices[0].voice_id)
+        }
+        setVoiceDataError(null)
+      } else {
+        console.log('No voice data found or invalid format')
+        setVoices([])
+        setSelectedVoice("")
+        setVoiceDataError('No voices available. Please process the ebook first.')
+      }
+      
+      // Load NER data
+      try {
+        const nerData = await getNerDataFile({
+          userId,
+          projectId
+        })
+        
+        if (nerData) {
+          // Cast to the correct type and check if it has the expected structure
+          const typedNerData = nerData as unknown as NerDataFromApi;
+          if (typedNerData.book_summary) {
+            setNerData({
+              book_summary: typedNerData.book_summary,
+              chapters: typedNerData.chapters || []
+            });
+          } else if (typedNerData.entities) {
+            console.log('Legacy NER data format detected')
+          } else {
+            console.log('NER data has unexpected format')
+          }
+        } else {
+          setNerData(null)
+        }
+      } catch (nerError) {
+        console.error('Error loading NER data:', nerError)
+      }
+      
+      // Load pronunciation corrections
+      try {
+        const corrections = await getJsonFromR2<PronunciationCorrection[]>({
+          userId,
+          projectId,
+          filename: 'pronunciation-corrections.json'
+        })
+        
+        if (corrections) {
+          setPronunciationCorrections(corrections)
+        }
+      } catch (correctionsError) {
+        console.error('Error loading pronunciation corrections:', correctionsError)
+      }
+      
+    } catch (error) {
+      console.error('Error loading voice and NER data:', error)
+      setVoiceDataError('Failed to load voice data. Please try again later.')
+    }
+  }, [project?.voice_id]);
 
   // Add a useEffect to reset the replace images flag when storyboard is complete
   useEffect(() => {
@@ -700,183 +774,43 @@ export default function ProjectDetail() {
   // Replace the useEffect that checks for voice data after intake
   useEffect(() => {
     if (projectStatus?.Ebook_Prep_Status === 'Complete' && project) {
-      console.log('Ebook processing complete, checking for voice data file...')
-      
-      const checkForVoiceData = async () => {
-        try {
-          setVoiceDataError(null)
-          const { data: { session } } = await supabase.auth.getSession()
-          if (!session) return
-          
-          const voiceData = await getVoiceDataFile({
-            userId: session.user.id,
-            projectId: project.id
-          })
-          
-          console.log('Voice data check after intake:', voiceData)
-          
-          if (voiceData?.voices && Array.isArray(voiceData.voices) && voiceData.voices.length > 0) {
-            setVoices(voiceData.voices)
-            // Set default selected voice if available
-            if (project.voice_id && voiceData.voices.some(v => v.voice_id === project.voice_id)) {
-              // If project has a saved voice_id and it exists in the available voices, use it
-              setSelectedVoice(project.voice_id)
-            } else {
-              // Otherwise use the first voice
-              setSelectedVoice(voiceData.voices[0].voice_id)
-            }
-            setVoiceDataError(null)
-          } else {
-            console.error('Voice data file not found or empty after intake')
-            setVoiceDataError('Voice data file not found after intake. Please try reprocessing the ebook.')
-            setVoices([])
-            setSelectedVoice("")
-          }
-        } catch (error) {
-          console.error('Error checking for voice data:', error)
-          setVoiceDataError('Failed to load voice data. Please try again later.')
-        }
-      }
-      
-      // Also check for NER data when ebook processing is complete
-      const checkForNerData = async () => {
+      const loadData = async () => {
         try {
           const { data: { session } } = await supabase.auth.getSession()
           if (!session) return
           
-          const nerData = await getNerDataFile({
-            userId: session.user.id,
-            projectId: project.id
-          })
-          
-          console.log('NER data check after intake:', nerData)
-          
-          if (nerData) {
-            console.log('NER data found after intake')
-            // Cast to the correct type and check if it has the expected structure
-            const typedNerData = nerData as unknown as NerDataFromApi;
-            if (typedNerData.book_summary) {
-              setNerData({
-                book_summary: typedNerData.book_summary,
-                chapters: typedNerData.chapters || []
-              });
-            } else if (typedNerData.entities) {
-              // Handle legacy format
-              console.log('Legacy NER data format detected')
-            } else {
-              console.log('NER data has unexpected format:', nerData)
-            }
-          } else {
-            console.log('No NER data found after intake')
-            setNerData(null)
-          }
+          await loadVoiceAndNerData(session.user.id, project.id)
         } catch (error) {
-          console.error('Error checking for NER data:', error)
+          console.error('Error checking for voice and NER data:', error)
         }
       }
       
-      checkForVoiceData()
-      checkForNerData()
+      loadData()
     }
-  }, [projectStatus?.Ebook_Prep_Status, project])
+  }, [projectStatus?.Ebook_Prep_Status, project, loadVoiceAndNerData])
 
-  // Add a useEffect to refresh voice data when ebook processing completes
+  // Refactor the useEffect for voice data refresh after ebook completion
   useEffect(() => {
-    // Check if ebook processing just completed and project exists
     if (projectStatus?.Ebook_Prep_Status === "Ebook Processing Complete" && project) {
-      // Refresh voice data
-      const refreshVoiceData = async () => {
+      const refreshData = async () => {
         try {
-          setVoiceDataError(null)
           const { data: { session } } = await supabase.auth.getSession()
           if (!session) return
           
-          const voiceData = await getVoiceDataFile({
-            userId: session.user.id,
-            projectId: project.id
-          })
+          await loadVoiceAndNerData(session.user.id, project.id)
           
-          console.log('Refreshing voice data after ebook completion:', voiceData)
-          
-          if (voiceData?.voices && Array.isArray(voiceData.voices) && voiceData.voices.length > 0) {
-            setVoices(voiceData.voices)
-            // Set default selected voice if available
-            if (project.voice_id && voiceData.voices.some(v => v.voice_id === project.voice_id)) {
-              // If project has a saved voice_id and it exists in the available voices, use it
-              setSelectedVoice(project.voice_id)
-            } else {
-              // Otherwise use the first voice
-              setSelectedVoice(voiceData.voices[0].voice_id)
-            }
-            setVoiceDataError(null)
-          } else {
-            console.log('No voice data found after ebook completion')
-            setVoiceDataError('No voices available yet. Please wait a moment and refresh the page.')
-            
-            // Set a timer to try again in 5 seconds
-            setTimeout(() => refreshVoiceData(), 5000)
+          // Optional retry if no voices are found
+          if (voices.length === 0) {
+            setTimeout(() => loadVoiceAndNerData(session.user.id, project.id), 5000)
           }
-
-          // Also load NER data after ebook processing completes
-          try {
-            const nerData = await getNerDataFile({
-              userId: session.user.id,
-              projectId: project.id
-            })
-            
-            console.log('NER data check after ebook completion:', nerData)
-            
-            if (nerData) {
-              console.log('NER data found after ebook completion')
-              // Cast to the correct type and check if it has the expected structure
-              const typedNerData = nerData as unknown as NerDataFromApi;
-              if (typedNerData.book_summary) {
-                setNerData({
-                  book_summary: typedNerData.book_summary,
-                  chapters: typedNerData.chapters || []
-                });
-              } else if (typedNerData.entities) {
-                // Handle legacy format
-                console.log('Legacy NER data format detected')
-              } else {
-                console.log('NER data has unexpected format:', nerData)
-              }
-            } else {
-              console.log('No NER data found after ebook completion')
-              setNerData(null)
-            }
-          } catch (nerError) {
-            console.error('Error loading NER data:', nerError)
-          }
-
-          // Also load pronunciation corrections data
-          try {
-            console.log('Loading pronunciation corrections after ebook completion')
-            const corrections = await getJsonFromR2<PronunciationCorrection[]>({
-              userId: session.user.id,
-              projectId: project.id,
-              filename: 'pronunciation-corrections.json'
-            })
-            
-            if (corrections) {
-              console.log('Pronunciation corrections found:', corrections.length)
-              setPronunciationCorrections(corrections)
-            } else {
-              console.log('No pronunciation corrections found')
-              setPronunciationCorrections([])
-            }
-          } catch (correctionsError) {
-            console.error('Error loading pronunciation corrections:', correctionsError)
-          }
-
         } catch (error) {
-          console.error('Error refreshing voice data:', error)
+          console.error('Error refreshing data:', error)
         }
       }
       
-      refreshVoiceData()
+      refreshData()
     }
-  }, [projectStatus?.Ebook_Prep_Status, project])
+  }, [projectStatus?.Ebook_Prep_Status, project, loadVoiceAndNerData, voices.length])
 
   const handleScrollSliderChange = (value: number[]) => {
     setSliderValue(value[0])
@@ -967,7 +901,7 @@ export default function ProjectDetail() {
     checkForTrack2();
   }, [items, checkForTrack2]);
 
-  // Modify the handleNewAudio function
+  // Modify the handleNewAudio function with better cleanup pattern
   const handleNewAudio = async (item: StoryboardItem) => {
     if (!item.audio?.path || processingNewAudio.has(item.number)) return;
     
@@ -998,45 +932,60 @@ export default function ProjectDetail() {
       await handleGenerateStoryboard();
       
       // Add a delay before starting to check for completion
-      setTimeout(() => {
-        const checkInterval = setInterval(async () => {
-          const status = await getProjectStatus({
-            userId: session.user.id,
-            projectId: project.id
-          });
-          
-          if (status?.Storyboard_Status === "Storyboard Complete") {
-            clearInterval(checkInterval);
-            setProcessingNewAudio(prev => {
-              const next = new Set(prev);
-              next.delete(itemNumber);
-              return next;
+      let checkInterval: NodeJS.Timeout | null = null;
+      let cleanupTimeout: NodeJS.Timeout | null = null;
+      let initialDelayTimeout: NodeJS.Timeout | null = null;
+      
+      // Initial delay before starting to check
+      initialDelayTimeout = setTimeout(() => {
+        checkInterval = setInterval(async () => {
+          try {
+            const status = await getProjectStatus({
+              userId: session.user.id,
+              projectId: project.id
             });
             
-            // Set track 2 as primary since the new audio is now the original file
-            setPrimaryTrack(2);
-            
-            // Fetch the updated project data
-            await fetchProject();
-            
-            // Force remount of the audio player by updating its key
-            setAudioRemountKeys(prev => ({
-              ...prev,
-              [itemNumber]: Date.now()
-            }));
-            
-            // Force update hasTrack2 after fetchProject
-            setHasTrack2(prev => {
-              const newSet = new Set(prev);
-              newSet.add(itemNumber);
-              return newSet;
-            });
+            if (status?.Storyboard_Status === "Storyboard Complete") {
+              if (initialDelayTimeout) clearTimeout(initialDelayTimeout);
+              if (checkInterval) clearInterval(checkInterval);
+              if (cleanupTimeout) clearTimeout(cleanupTimeout);
+              
+              setProcessingNewAudio(prev => {
+                const next = new Set(prev);
+                next.delete(itemNumber);
+                return next;
+              });
+              
+              // Set track 2 as primary since the new audio is now the original file
+              setPrimaryTrack(2);
+              
+              // Fetch the updated project data
+              await fetchProject();
+              
+              // Force remount of the audio player by updating its key
+              setAudioRemountKeys(prev => ({
+                ...prev,
+                [itemNumber]: Date.now()
+              }));
+              
+              // Force update hasTrack2 after fetchProject
+              setHasTrack2(prev => {
+                const newSet = new Set(prev);
+                newSet.add(itemNumber);
+                return newSet;
+              });
+            }
+          } catch (error) {
+            console.error('Error checking storyboard status:', error);
+            if (initialDelayTimeout) clearTimeout(initialDelayTimeout);
+            if (checkInterval) clearInterval(checkInterval);
           }
         }, 5000); // Check every 5 seconds
         
         // Cleanup interval after 10 minutes to prevent infinite checking
-        setTimeout(() => {
-          clearInterval(checkInterval);
+        cleanupTimeout = setTimeout(() => {
+          if (initialDelayTimeout) clearTimeout(initialDelayTimeout);
+          if (checkInterval) clearInterval(checkInterval);
           setProcessingNewAudio(prev => {
             const next = new Set(prev);
             next.delete(itemNumber);
@@ -1196,8 +1145,8 @@ export default function ProjectDetail() {
           Current_Status: "Ebook is Processing",
           Ebook_Prep_Status: "Processing Ebook File, Please Wait",
           Storyboard_Status: "Waiting for Ebook Processing Completion",
-          Audiobook_Status: "Waiting for Storyboard Completion",
-          Publish_Status: "Not Started"
+          Proof_Status: "Waiting for Storyboard Completion",
+          Audiobook_Status: "Not Started"
         }
       })
 
@@ -1300,6 +1249,17 @@ export default function ProjectDetail() {
     setIsStoryboardConfirmOpen(true)
   }
   
+  // Create a helper function for mapping pronunciation corrections to the format needed by the API
+  const mapPronunciationCorrections = (corrections: PronunciationCorrection[]): Array<{
+    originalName: string;
+    ipaPronunciation: string;
+  }> => {
+    return corrections.map(correction => ({
+      originalName: correction.originalName,
+      ipaPronunciation: correction.ipaPronunciation
+    }))
+  }
+  
   const processStoryboardGeneration = async () => {
     try {
       // Close the confirmation dialog immediately
@@ -1329,8 +1289,8 @@ export default function ProjectDetail() {
           Current_Status: "Storyboard is Processing",
           Ebook_Prep_Status: "Ebook Processing Complete",
           Storyboard_Status: "Processing Storyboard, Please Wait",
-          Audiobook_Status: "Waiting for Storyboard Completion",
-          Publish_Status: "Not Started"
+          Proof_Status: "Waiting for Storyboard Completion",
+          Audiobook_Status: "Not Started"
         }
       })
 
@@ -1350,15 +1310,13 @@ export default function ProjectDetail() {
       if (pronunciationCorrections.length > 0) {
         try {
           // First, create/update the master pronunciation dictionary in ElevenLabs
+          const mappedCorrections = mapPronunciationCorrections(pronunciationCorrections)
           const result = await createMasterPronunciationDictionary(
             session.user.id,
             project.id,
             project.project_name,
             project.book_title,
-            pronunciationCorrections.map(correction => ({
-              originalName: correction.originalName,
-              ipaPronunciation: correction.ipaPronunciation
-            }))
+            mappedCorrections
           )
           
           if (result.created) {
@@ -1383,10 +1341,7 @@ export default function ProjectDetail() {
               projectId: project.id,
               projectName: project.project_name,
               bookName: project.book_title,
-              pronunciationCorrections: pronunciationCorrections.map(correction => ({
-                originalName: correction.originalName,
-                ipaPronunciation: correction.ipaPronunciation
-              }))
+              pronunciationCorrections: mappedCorrections
             })
             
             if (!addResult.success) {
@@ -1408,9 +1363,6 @@ export default function ProjectDetail() {
         // If no new corrections but project has a dictionary name, use the master dictionary
         dictionaryParam = ` -pd "${masterDictionaryName}"`
       }
-      
-      // Log the dictionary parameter for debugging
-      console.log(`Sending command with dictionary parameter: ${dictionaryParam || 'none'}`)
       
       const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -ss`
       await sendCommand(command)
@@ -1444,8 +1396,8 @@ export default function ProjectDetail() {
           Current_Status: "Audiobook is Processing",
           Ebook_Prep_Status: "Ebook Processing Complete",
           Storyboard_Status: "Storyboard Complete",
-          Audiobook_Status: "Audiobook Processing, Please Wait",
-          Publish_Status: "Not Started"
+          Proof_Status: "Audiobook Processing, Please Wait",
+          Audiobook_Status: "Not Started"
         }
       })
 
@@ -1513,7 +1465,7 @@ export default function ProjectDetail() {
     console.log('Saved preference to cookie');
   }
   
-  // New function to handle the actual image processing
+  // New function to handle the actual image processing with better cleanup
   const processImageAction = async (item: StoryboardItem) => {
     if (!item.image?.path) return
     
@@ -1523,9 +1475,10 @@ export default function ProjectDetail() {
       if (!project) throw new Error('No project')
 
       const isRestoreAction = checkForJpgoldset(item.number)
+      const itemNumber = item.number
 
-      setProcessingNewImageSet(prev => new Set(prev).add(item.number))
-      setProcessingItems(prev => new Set(prev).add(item.number))
+      setProcessingNewImageSet(prev => new Set(prev).add(itemNumber))
+      setProcessingItems(prev => new Set(prev).add(itemNumber))
       
       // Set the replace images flag if this is not a restore action
       if (!isRestoreAction) {
@@ -1534,7 +1487,7 @@ export default function ProjectDetail() {
 
       // Extract the image number from the path to verify we're processing the correct image
       const imageMatch = item.image.path.match(/image(\d+)\.jpg$/)
-      if (!imageMatch || parseInt(imageMatch[1]) !== item.number) {
+      if (!imageMatch || parseInt(imageMatch[1]) !== itemNumber) {
         throw new Error('Image number mismatch')
       }
 
@@ -1556,27 +1509,47 @@ export default function ProjectDetail() {
         await handleGenerateStoryboard()
 
         // Add a delay before starting to check for completion
-        setTimeout(() => {
-          const checkInterval = setInterval(async () => {
-            const status = await getProjectStatus({
-              userId: session.user.id,
-              projectId: project.id
-            })
-
-            if (status?.Storyboard_Status === "Storyboard Complete") {
-              clearInterval(checkInterval)
-              setProcessingItems(prev => {
-                const next = new Set(prev)
-                next.delete(item.number)
-                return next
+        let checkInterval: NodeJS.Timeout | null = null;
+        let cleanupTimeout: NodeJS.Timeout | null = null;
+        let initialDelayTimeout: NodeJS.Timeout | null = null;
+        
+        initialDelayTimeout = setTimeout(() => {
+          checkInterval = setInterval(async () => {
+            try {
+              const status = await getProjectStatus({
+                userId: session.user.id,
+                projectId: project.id
               })
-              await fetchProject()
+
+              if (status?.Storyboard_Status === "Storyboard Complete") {
+                if (initialDelayTimeout) clearTimeout(initialDelayTimeout);
+                if (checkInterval) clearInterval(checkInterval);
+                if (cleanupTimeout) clearTimeout(cleanupTimeout);
+                
+                setProcessingItems(prev => {
+                  const next = new Set(prev)
+                  next.delete(itemNumber)
+                  return next
+                })
+                
+                await fetchProject()
+              }
+            } catch (error) {
+              console.error('Error checking storyboard status:', error);
+              if (initialDelayTimeout) clearTimeout(initialDelayTimeout);
+              if (checkInterval) clearInterval(checkInterval);
             }
           }, 5000) // Check every 5 seconds
 
           // Cleanup interval after 10 minutes to prevent infinite checking
-          setTimeout(() => {
-            clearInterval(checkInterval)
+          cleanupTimeout = setTimeout(() => {
+            if (initialDelayTimeout) clearTimeout(initialDelayTimeout);
+            if (checkInterval) clearInterval(checkInterval);
+            setProcessingItems(prev => {
+              const next = new Set(prev)
+              next.delete(itemNumber)
+              return next
+            })
           }, 600000)
         }, 6000) // Initial 6 second delay
       }
@@ -1689,7 +1662,7 @@ export default function ProjectDetail() {
 
   // Add a useEffect to debug the voices state
   useEffect(() => {
-    console.log('Voices state:', voices, 'selectedVoice:', selectedVoice)
+    // Remove excessive debug logging
   }, [voices, selectedVoice])
 
   // Add function to save selected voice to the project
@@ -1815,7 +1788,7 @@ export default function ProjectDetail() {
           // This prevents the update from happening when just viewing the project
           if (shouldUpdateDictionary && project.pls_dict_name) {
             try {
-              console.log('Updating dictionary in Elevenlabs because shouldUpdateDictionary flag is true')
+              console.log('Updating dictionary in Elevenlabs')
               const response = await fetch('/api/elevenlabs-dictionary-update', {
                 method: 'POST',
                 headers: {
@@ -1887,10 +1860,7 @@ export default function ProjectDetail() {
             project.id,
             project.project_name,
             project.book_title,
-            updatedCorrections.map(correction => ({
-              originalName: correction.originalName,
-              ipaPronunciation: correction.ipaPronunciation
-            }))
+            mapPronunciationCorrections(updatedCorrections)
           )
         } catch (dictError) {
           console.error('Error updating pronunciation dictionary after deletion:', dictError)
@@ -2073,7 +2043,7 @@ export default function ProjectDetail() {
   // Add a useEffect to fetch HLS path when component mounts and when projectStatus changes
   useEffect(() => {
     // Only fetch HLS path when the project is published
-    if (projectStatus?.Publish_Status === "Publish Complete") {
+    if (projectStatus?.Audiobook_Status === "Audiobook Complete") {
       fetchHlsPath()
     }
   }, [projectStatus, project, fetchHlsPath])
@@ -2097,7 +2067,7 @@ export default function ProjectDetail() {
     // Don't initialize if hlsPath is not set or still preparing
     if (!hlsPath || !hlsVideoRef.current || isPreparingHls) return;
 
-    console.log('Setting up HLS player for:', hlsPath);
+    console.log('Setting up HLS player');
     
     // Reset error state when trying a new path
     setHlsLoadError(null);
@@ -2125,7 +2095,7 @@ export default function ProjectDetail() {
     }
     // For other browsers, use HLS.js if supported
     else if (Hls.isSupported()) {
-      console.log('Using HLS.js with proxy approach');
+      console.log('Using HLS.js');
       
       try {
         // Create a new HLS instance with Cloudflare-recommended settings
@@ -2200,10 +2170,6 @@ export default function ProjectDetail() {
           console.log('HLS manifest loaded successfully');
         });
         
-        hls.on(Hls.Events.LEVEL_LOADED, (event, data) => {
-          console.log(`HLS level loaded: duration=${data.details.totalduration}s, fragments=${data.details.fragments.length}`);
-        });
-        
         // First attach the media
         hls.attachMedia(videoElement);
         
@@ -2245,10 +2211,10 @@ export default function ProjectDetail() {
     const videoElement = hlsVideoRef.current;
     if (!videoElement) return;
     
-    // Just add basic logging for events
-    const handlePlay = () => console.log('Video playing');
-    const handlePause = () => console.log('Video paused');
-    const handleEnded = () => console.log('Video playback ended');
+    // Add basic logging for events when needed
+    const handlePlay = () => {};
+    const handlePause = () => {};
+    const handleEnded = () => {};
     
     videoElement.addEventListener('play', handlePlay);
     videoElement.addEventListener('pause', handlePause);
@@ -2260,6 +2226,61 @@ export default function ProjectDetail() {
       videoElement.removeEventListener('ended', handleEnded);
     };
   }, []);
+
+  // Add a new function to handle generating the final audiobook
+  const handleGenerateFinalAudiobook = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No session')
+      if (!project) throw new Error('Project not found')
+
+      // Extract filename from epub_file_path
+      const epubFilename = project.epub_file_path.split('/').pop()
+      if (!epubFilename) throw new Error('EPUB filename not found')
+
+      await updateProjectStatus({
+        userId: session.user.id,
+        projectId: project.id,
+        status: {
+          Project: project.project_name,
+          Book: project.book_title,
+          notify: session.user.email || '',
+          userid: session.user.id,
+          projectid: project.id,
+          Current_Status: "Final Audiobook is Processing",
+          Ebook_Prep_Status: "Ebook Processing Complete",
+          Storyboard_Status: "Storyboard Complete",
+          Proof_Status: "Proofs Complete",
+          Audiobook_Status: "Processing Audiobook, Please Wait"
+        }
+      })
+
+      await fetchProject()
+
+      // Use the author_name and book_title from the project
+      const authorName = project.author_name || "Mike Langlois"
+      const bookTitle = project.book_title || "Walker"
+      
+      // Use the voice name from the project
+      const voiceName = project.voice_name || "Abe"
+
+      // Use the master pronunciation dictionary
+      let dictionaryParam = ""
+      if (project.pls_dict_name) {
+        dictionaryParam = ` -pd "${masterDictionaryName}"`
+      }
+
+      // Log the dictionary parameter for debugging
+      console.log(`Sending final audiobook command with dictionary parameter: ${dictionaryParam || 'none'}`)
+
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -sp`
+      await sendCommand(command)
+      toast.success('Final audiobook generation started')
+    } catch (error) {
+      console.error('Error generating final audiobook:', error)
+      toast.error('Failed to start final audiobook generation')
+    }
+  }
 
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
@@ -2350,20 +2371,20 @@ export default function ProjectDetail() {
             Storyboard
           </TabsTrigger>
           <TabsTrigger
-            value="audiobook"
+            value="proofs"
             className={`flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-green-600 data-[state=active]:shadow-sm ${
+              projectStatus?.Proof_Status === "Proofs Complete" ? 'bg-green-50' : ''
+            }`}
+          >
+            Proofs
+          </TabsTrigger>
+          <TabsTrigger
+            value="audiobook"
+            className={`flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-purple-600 data-[state=active]:shadow-sm ${
               projectStatus?.Audiobook_Status === "Audiobook Complete" ? 'bg-green-50' : ''
             }`}
           >
             Audiobook
-          </TabsTrigger>
-          <TabsTrigger
-            value="publish"
-            className={`flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-purple-600 data-[state=active]:shadow-sm ${
-              projectStatus?.Publish_Status === "Publish Complete" ? 'bg-green-50' : ''
-            }`}
-          >
-            Publish
           </TabsTrigger>
         </TabsList>
 
@@ -2967,10 +2988,10 @@ export default function ProjectDetail() {
                 <Button 
                   variant="outline"
                   onClick={handleGenerateAudiobook}
-                  disabled={!getAudiobookButtonState(projectStatus?.Audiobook_Status).enabled}
-                  className={getAudiobookButtonState(projectStatus?.Audiobook_Status).label === "Audiobook Complete" ? "bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200" : ""}
+                  disabled={!getAudiobookButtonState(projectStatus?.Proof_Status).enabled}
+                  className={getAudiobookButtonState(projectStatus?.Proof_Status).label === "Proofs Complete" ? "bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200" : ""}
                 >
-                  {getAudiobookButtonState(projectStatus?.Audiobook_Status).label}
+                  {getAudiobookButtonState(projectStatus?.Proof_Status).label}
                 </Button>
               </div>
               {loading ? (
@@ -3214,13 +3235,21 @@ export default function ProjectDetail() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="audiobook">
+          <TabsContent value="proofs">
             <Card className="p-2 border-0 shadow-none">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-2xl font-semibold">Audiobook</h3>
-                {projectStatus?.Publish_Status === "Publish Complete" && hlsPath && (
+                <h3 className="text-2xl font-semibold">Proofs</h3>
+                {projectStatus?.Proof_Status === "Proofs Complete" && projectStatus?.Audiobook_Status === "Ready to Process Audiobook" ? (
+                  <Button 
+                    variant="outline"
+                    onClick={handleGenerateFinalAudiobook}
+                    className="bg-blue-100 text-blue-700 hover:bg-blue-200 hover:text-blue-800 border-blue-200"
+                  >
+                    Generate Audiobook
+                  </Button>
+                ) : projectStatus?.Audiobook_Status === "Audiobook Complete" && (
                   <div className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm">
-                    Streaming Ready
+                    Audiobook Ready
                   </div>
                 )}
               </div>
@@ -3342,17 +3371,17 @@ export default function ProjectDetail() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="publish">
+          <TabsContent value="audiobook">
             <Card className="p-2 border-0 shadow-none">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-2xl font-semibold">Published Stream</h3>
-                {projectStatus?.Publish_Status === "Publish Complete" && (
+                <h3 className="text-2xl font-semibold">Audiobook Stream</h3>
+                {projectStatus?.Audiobook_Status === "Audiobook Complete" && (
                   <div className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm">
                     {hlsPath ? "Stream Available" : "Stream Processing"}
                   </div>
                 )}
               </div>
-              {projectStatus?.Publish_Status === "Publish Complete" ? (
+              {projectStatus?.Audiobook_Status === "Audiobook Complete" ? (
                 <div className="relative">
                   <div className="flex gap-4 overflow-x-auto pb-4 scroll-smooth">
                     <Card className="flex-shrink-0 w-[341px]">
@@ -3654,7 +3683,7 @@ export default function ProjectDetail() {
               onClick={saveSelectedVoice} 
               disabled={isUpdatingVoice}
             >
-              {isUpdatingVoice ? 'Saving...' : 'I&apos;m Sure'}
+              {isUpdatingVoice ? 'Saving...' : "I'm Sure"}
             </Button>
           </DialogFooter>
         </DialogContent>
