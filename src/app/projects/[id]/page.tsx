@@ -344,22 +344,28 @@ export default function ProjectDetail() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
       
+      // Query published_audiobooks table to get hls_path
+      console.log(`Querying published_audiobooks for userid=${session.user.id} and projectid=${project.id}`)
+      
+      // Use maybeSingle() instead of single() to prevent 406 errors when no rows match
       const { data, error } = await supabase
         .from('published_audiobooks')
         .select('hls_path')
         .eq('userid', session.user.id)
         .eq('projectid', project.id)
-        .single()
+        .maybeSingle()
       
       if (error) {
         console.error('Error fetching HLS path:', error)
-        setHlsLoadError('Could not retrieve streaming information')
+        setHlsLoadError(`Could not retrieve streaming information: ${error.message}`)
         setIsPreparingHls(false);
         return
       }
       
+      console.log('Query result:', data)
+      
       if (data?.hls_path) {
-        console.log('HLS path retrieved from database')
+        console.log('HLS path retrieved from database:', data.hls_path)
         
         // Reset error state
         setHlsLoadError(null)
@@ -2290,7 +2296,7 @@ export default function ProjectDetail() {
       {/* Hidden audio element for voice preview */}
       <audio ref={audioRef} className="hidden" />
       
-      <div className="flex items-start gap-6">
+      <div className="flex items-start gap-6 p-4 bg-gray-100 rounded-lg mb-4 shadow-sm">
         {/* Cover Image - reduced to 50% size */}
         {coverUrl && (
           <div className="relative w-[70px] h-[105px] flex-shrink-0">
@@ -2353,7 +2359,7 @@ export default function ProjectDetail() {
       </div>
 
       <Tabs defaultValue={getInitialTab(projectStatus)} className="w-full">
-        <TabsList className="flex w-full bg-gray-100 p-1 rounded-lg">
+        <TabsList className="flex w-full bg-gray-100 p-1 rounded-lg shadow-md">
           <TabsTrigger
             value="intake"
             className={`flex-1 rounded-md px-6 py-2.5 font-medium text-sm transition-all data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm ${
@@ -3248,9 +3254,13 @@ export default function ProjectDetail() {
                     Generate Audiobook
                   </Button>
                 ) : projectStatus?.Audiobook_Status === "Audiobook Complete" && (
-                  <div className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm">
+                  <Button 
+                    variant="outline"
+                    disabled
+                    className="bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200"
+                  >
                     Audiobook Ready
-                  </div>
+                  </Button>
                 )}
               </div>
               {videos.length > 0 ? (
@@ -3376,9 +3386,13 @@ export default function ProjectDetail() {
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-2xl font-semibold">Audiobook Stream</h3>
                 {projectStatus?.Audiobook_Status === "Audiobook Complete" && (
-                  <div className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm">
+                  <Button
+                    variant="outline"
+                    disabled
+                    className="bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200"
+                  >
                     {hlsPath ? "Stream Available" : "Stream Processing"}
-                  </div>
+                  </Button>
                 )}
               </div>
               {projectStatus?.Audiobook_Status === "Audiobook Complete" ? (
