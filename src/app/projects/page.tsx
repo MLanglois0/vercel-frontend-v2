@@ -245,8 +245,9 @@ export default function Projects() {
               <label className="block text-sm font-medium mb-1">Description</label>
               <Textarea
                 value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="Enter project description"
+                onChange={(e) => setFormData({ ...formData, description: e.target.value.slice(0, 120) })}
+                placeholder="Enter project description (max 120 characters)"
+                maxLength={120}
               />
             </div>
             <div className="grid gap-4">
@@ -293,27 +294,27 @@ export default function Projects() {
       <section>
         <h2 className="text-2xl font-semibold mb-4">Existing Projects</h2>
         {projects.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="flex flex-wrap gap-6">
             {projects.map((project) => (
-              <Card key={project.id} className="flex overflow-hidden h-[200px]">
+              <Card key={project.id} className="flex overflow-hidden h-[250px] w-[600px]">
                 {project.cover_file_path && coverUrls[project.id] && (
-                  <div className="relative w-[120px] h-[200px] flex-shrink-0">
+                  <div className="relative w-[170px] h-[250px] flex-shrink-0">
                     <Image
                       src={coverUrls[project.id]}
                       alt={`Cover for ${project.book_title}`}
                       fill
                       className="object-cover"
-                      sizes="120px"
+                      sizes="170px"
                       priority
                     />
                   </div>
                 )}
-                <div className="flex flex-col flex-1 h-full py-3">
+                <div className="flex flex-col flex-1 h-full py-3 w-[430px]">
                   <CardHeader className="pb-1 pt-0">
                     <CardTitle className="text-xl text-left">{project.project_name}</CardTitle>
                   </CardHeader>
                   <CardContent className="flex-1 py-1">
-                    <div className="space-y-1.5">
+                    <div className="space-y-2">
                       <p className="text-sm">
                         <span className="font-medium">Book: </span>
                         <span className="text-gray-700">{project.book_title}</span>
@@ -324,7 +325,7 @@ export default function Projects() {
                       </p>
                       <p className="text-sm">
                         <span className="font-medium">Description: </span>
-                        <span className="text-gray-700">{project.description}</span>
+                        <span className="text-gray-700 inline-block w-[400px]">{project.description}</span>
                       </p>
                       <p className="text-sm">
                         <span className="font-medium">Project Status: </span>
@@ -334,7 +335,7 @@ export default function Projects() {
                       </p>
                     </div>
                   </CardContent>
-                  <CardFooter className="pt-2 pb-3">
+                  <CardFooter className="pt-3 pb-3 mt-auto">
                     <Button 
                       variant="outline" 
                       className="w-full"

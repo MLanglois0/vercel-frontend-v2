@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ChevronLeft, ChevronRight, FileText, Play, Volume2 } from "lucide-react"
+import { ChevronLeft, ChevronRight, FileText, Play, Pause, Volume2, VolumeX } from "lucide-react"
 import { toast } from 'sonner'
 import { 
   getSignedImageUrls, 
@@ -326,6 +326,11 @@ export default function ProjectDetail() {
   
   // Add a state to track when HLS URL is being prepared
   const [isPreparingHls, setIsPreparingHls] = useState<boolean>(false);
+
+  // Add a state to track HLS video playing status
+  const [isHlsPlaying, setIsHlsPlaying] = useState(false);
+  const [isHlsMuted, setIsHlsMuted] = useState(false);
+  const [hlsProgress, setHlsProgress] = useState(0);
 
   // Update fetchHlsPath to use our proxy endpoint for HLS streaming
   const fetchHlsPath = useCallback(async () => {
@@ -2288,6 +2293,35 @@ export default function ProjectDetail() {
     }
   }
 
+  // Add effect to update progress bar for HLS playback
+  useEffect(() => {
+    const videoElement = hlsVideoRef.current;
+    if (!videoElement) return;
+
+    const updateProgress = () => {
+      if (videoElement.duration) {
+        setHlsProgress((videoElement.currentTime / videoElement.duration) * 100);
+      }
+    };
+
+    const handlePlay = () => setIsHlsPlaying(true);
+    const handlePause = () => setIsHlsPlaying(false);
+    const handleTimeUpdate = updateProgress;
+    const handleVolumeChange = () => setIsHlsMuted(videoElement.muted);
+
+    videoElement.addEventListener('play', handlePlay);
+    videoElement.addEventListener('pause', handlePause);
+    videoElement.addEventListener('timeupdate', handleTimeUpdate);
+    videoElement.addEventListener('volumechange', handleVolumeChange);
+
+    return () => {
+      videoElement.removeEventListener('play', handlePlay);
+      videoElement.removeEventListener('pause', handlePause);
+      videoElement.removeEventListener('timeupdate', handleTimeUpdate);
+      videoElement.removeEventListener('volumechange', handleVolumeChange);
+    };
+  }, [hlsVideoRef]);
+
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
 
@@ -2315,26 +2349,27 @@ export default function ProjectDetail() {
         <div className="flex flex-1 justify-between">
           <div className="space-y-2">
             <h1 className="text-2xl font-bold">{project?.project_name}</h1>
-            <p className="text-sm">
-              <span className="font-medium">Book: </span>
-              <span className="text-gray-700">{project?.book_title}</span>
-            </p>
-            <p className="text-sm">
-              <span className="font-medium">Author: </span>
-              <span className="text-gray-700">{project?.author_name}</span>
-            </p>
-            <p className="text-sm">
-              <span className="font-medium">Description: </span>
-              <span className="text-gray-700">{project?.description}</span>
-            </p>
-            {projectStatus && (
-              <p className="text-sm">
-                <span className="font-medium">Project Status: </span>
-                <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md">
-                  {projectStatus.Current_Status}
-                </span>
-              </p>
-            )}
+            <div className="grid grid-cols-[120px_1fr] gap-y-2">
+              <p className="text-sm font-medium">Book:</p>
+              <p className="text-sm text-gray-700">{project?.book_title || ''}</p>
+              
+              <p className="text-sm font-medium">Author:</p>
+              <p className="text-sm text-gray-700">{project?.author_name || ''}</p>
+              
+              <p className="text-sm font-medium self-start">Description:</p>
+              <p className="text-sm text-gray-700 max-w-[500px] whitespace-normal break-words">{project?.description || ''}</p>
+              
+              {projectStatus && (
+                <>
+                  <p className="text-sm font-medium">Project Status:</p>
+                  <p className="text-sm">
+                    <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md">
+                      {projectStatus.Current_Status}
+                    </span>
+                  </p>
+                </>
+              )}
+            </div>
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => {
@@ -3407,8 +3442,6 @@ export default function ProjectDetail() {
                                 <video 
                                   ref={hlsVideoRef}
                                   className="w-full h-full object-cover" 
-                                  controls
-                                  controlsList="nodownload" 
                                   playsInline
                                   onError={(e) => {
                                     console.error('Video element error:', e);
@@ -3483,6 +3516,69 @@ export default function ProjectDetail() {
                               </div>
                             )}
                           </div>
+                          {/* Custom player controls - similar to Proofs tab */}
+                          {hlsPath && !isPreparingHls && !hlsLoadError && (
+                            <div className="flex justify-center">
+                              <div className="flex items-center space-x-2 bg-gray-100 p-2 rounded-md w-full">
+                                <Button 
+                                  variant="outline" 
+                                  size="icon" 
+                                  className="h-8 w-8"
+                                  onClick={() => {
+                                    const video = hlsVideoRef.current;
+                                    if (!video) return;
+                                    
+                                    if (video.paused) {
+                                      video.play();
+                                    } else {
+                                      video.pause();
+                                    }
+                                  }}
+                                >
+                                  {isHlsPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                                </Button>
+                                <div className="flex-1">
+                                  <input 
+                                    type="range" 
+                                    className="w-full" 
+                                    min="0" 
+                                    max="100" 
+                                    value={hlsProgress}
+                                    onChange={(e) => {
+                                      const video = hlsVideoRef.current;
+                                      if (!video) return;
+                                      
+                                      const time = (parseInt(e.target.value) / 100) * video.duration;
+                                      video.currentTime = time;
+                                      setHlsProgress(parseInt(e.target.value));
+                                    }}
+                                    onMouseDown={() => {
+                                      const video = hlsVideoRef.current;
+                                      if (video) video.pause();
+                                    }}
+                                    onMouseUp={() => {
+                                      const video = hlsVideoRef.current;
+                                      if (video && isHlsPlaying) video.play();
+                                    }}
+                                  />
+                                </div>
+                                <Button 
+                                  variant="outline" 
+                                  size="icon" 
+                                  className="h-8 w-8"
+                                  onClick={() => {
+                                    const video = hlsVideoRef.current;
+                                    if (!video) return;
+                                    
+                                    video.muted = !video.muted;
+                                    setIsHlsMuted(!isHlsMuted);
+                                  }}
+                                >
+                                  {isHlsMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                                </Button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </CardContent>
                     </Card>
@@ -3576,8 +3672,9 @@ export default function ProjectDetail() {
               <label className="block text-sm font-medium mb-1">Description</label>
               <Textarea
                 value={editFormData.description}
-                onChange={(e) => setEditFormData({ ...editFormData, description: e.target.value })}
-                placeholder="Enter project description"
+                onChange={(e) => setEditFormData({ ...editFormData, description: e.target.value.slice(0, 120) })}
+                placeholder="Enter project description (max 120 characters)"
+                maxLength={120}
                 disabled={isEditing}
               />
             </div>
