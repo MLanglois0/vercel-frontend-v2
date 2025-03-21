@@ -2331,15 +2331,15 @@ export default function ProjectDetail() {
       <audio ref={audioRef} className="hidden" />
       
       <div className="flex items-start gap-6 p-4 bg-gray-100 rounded-lg mb-4 shadow-sm">
-        {/* Cover Image - reduced to 50% size */}
+        {/* Cover Image - sized to match content height */}
         {coverUrl && (
-          <div className="relative w-[70px] h-[105px] flex-shrink-0">
+          <div className="relative w-[100px] h-[150px] flex-shrink-0">
             <Image
               src={coverUrl}
               alt={`Cover for ${project?.book_title}`}
               fill
               className="object-cover rounded-md"
-              sizes="70px"
+              sizes="100px"
               priority
             />
           </div>
