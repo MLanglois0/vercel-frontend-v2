@@ -281,6 +281,8 @@ export default function ProjectDetail() {
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState<StoryboardItem[]>([])
+  // Add state for tracking the current mode
+  const [mode, setMode] = useState<"validation" | "production">("validation")
   const [selectedText, setSelectedText] = useState<string | null>(null)
   const [isTextDialogOpen, setIsTextDialogOpen] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -1194,6 +1196,12 @@ export default function ProjectDetail() {
     }
   };
 
+  // Log mode changes
+  useEffect(() => {
+    console.log(`Mode changed to: ${mode}`)
+  }, [mode])
+
+  // Update handleProcessEpub to use the mode
   const handleProcessEpub = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -1232,7 +1240,9 @@ export default function ProjectDetail() {
       const selectedVoiceData = voices.find(voice => voice.voice_id === selectedVoice);
       const voiceName = selectedVoiceData?.name || "Abe"; // Default to "Abe" if no voice selected or found
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 5 -si -m validation`
+      // Use the selected mode in the command
+      const modeParam = mode === "validation" ? "validation" : "production"
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 5 -si -m ${modeParam}`
       await sendCommand(command)
       toast.success('Processing started')
     } catch (error) {
@@ -1331,6 +1341,7 @@ export default function ProjectDetail() {
     }))
   }
   
+  // Update processStoryboardGeneration to use the mode
   const processStoryboardGeneration = async () => {
     try {
       // Close the confirmation dialog immediately
@@ -1435,7 +1446,9 @@ export default function ProjectDetail() {
         dictionaryParam = ` -pd "${masterDictionaryName}"`
       }
       
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -ss -m validation`
+      // Use the selected mode in the command
+      const modeParam = mode === "validation" ? "validation" : "production"
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -ss -m ${modeParam}`
       await sendCommand(command)
       
       toast.success('Storyboard generation started. This may take a few minutes.')
@@ -1445,6 +1458,7 @@ export default function ProjectDetail() {
     }
   }
 
+  // Update handleGenerateAudiobook to use the mode
   const handleGenerateAudiobook = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -1490,7 +1504,9 @@ export default function ProjectDetail() {
       // Log the dictionary parameter for debugging
       console.log(`Sending audiobook command with dictionary parameter: ${dictionaryParam || 'none'}`)
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -sb -m validation`
+      // Use the selected mode in the command
+      const modeParam = mode === "validation" ? "validation" : "production"
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -sb -m ${modeParam}`
       await sendCommand(command)
       toast.success('Generation started')
     } catch (error) {
@@ -2298,7 +2314,7 @@ export default function ProjectDetail() {
     };
   }, []);
 
-  // Add a new function to handle generating the final audiobook
+  // Update handleGenerateFinalAudiobook to use the mode
   const handleGenerateFinalAudiobook = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -2344,7 +2360,9 @@ export default function ProjectDetail() {
       // Log the dictionary parameter for debugging
       console.log(`Sending final audiobook command with dictionary parameter: ${dictionaryParam || 'none'}`)
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -sp`
+      // Use the selected mode in the command
+      const modeParam = mode === "validation" ? "validation" : "production"
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -sp -m ${modeParam}`
       await sendCommand(command)
       toast.success('Final audiobook generation started')
     } catch (error) {
@@ -2386,7 +2404,7 @@ export default function ProjectDetail() {
   if (!project) return <div>Project not found</div>
 
   return (
-    <div className="container mx-auto px-4 py-8">
+    <div className="container mx-auto px-4 py-4">
       {/* Hidden audio element for voice preview */}
       <audio ref={audioRef} className="hidden" />
       
@@ -2405,52 +2423,140 @@ export default function ProjectDetail() {
           </div>
         )}
 
-        {/* Project Info and Actions */}
-        <div className="flex flex-1 justify-between">
-          <div className="space-y-2">
+        {/* Project Info and Actions in a more compact layout */}
+        <div className="flex-1">
+          {/* Project Title and Action Buttons - more compact */}
+          <div className="flex justify-between items-center mb-3">
             <h1 className="text-2xl font-bold">{project?.project_name}</h1>
-            <div className="grid grid-cols-[120px_1fr] gap-y-2">
-              <p className="text-sm font-medium">Book:</p>
-              <p className="text-sm text-gray-700">{project?.book_title || ''}</p>
-              
-              <p className="text-sm font-medium">Author:</p>
-              <p className="text-sm text-gray-700">{project?.author_name || ''}</p>
-              
-              <p className="text-sm font-medium self-start">Description:</p>
-              <p className="text-sm text-gray-700 max-w-[500px] whitespace-normal break-words">{project?.description || ''}</p>
-              
-              {projectStatus && (
-                <>
-                  <p className="text-sm font-medium">Project Status:</p>
-                  <p className="text-sm">
-                    <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md">
-                      {projectStatus.Current_Status}
-                    </span>
-                  </p>
-                </>
-              )}
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => {
+                // Populate the form with current project data
+                if (project) {
+                  setEditFormData({
+                    project_name: project.project_name,
+                    book_title: project.book_title,
+                    author_name: project.author_name,
+                    description: project.description
+                  });
+                }
+                setIsEditDialogOpen(true);
+              }}>
+                Edit Project
+              </Button>
+              <Button variant="destructive" onClick={() => setIsDeleteDialogOpen(true)}>
+                Delete Project
+              </Button>
             </div>
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => {
-              // Populate the form with current project data
-              if (project) {
-                setEditFormData({
-                  project_name: project.project_name,
-                  book_title: project.book_title,
-                  author_name: project.author_name,
-                  description: project.description
-                });
-              }
-              setIsEditDialogOpen(true);
-            }}>
-              Edit Project
-            </Button>
-            <Button variant="destructive" onClick={() => setIsDeleteDialogOpen(true)}>
-              Delete Project
-            </Button>
+          
+          {/* Project Details Section - more compact grid */}
+          <div className="grid grid-cols-[120px_1fr] gap-y-2">
+            <p className="text-sm font-medium">Book:</p>
+            <div className="flex items-center">
+              <p className="text-sm text-gray-700 w-[200px]">{project?.book_title || ''}</p>
+              
+              {/* Remove the old mode toggle buttons from here */}
+            </div>
+            
+            <p className="text-sm font-medium">Author:</p>
+            <p className="text-sm text-gray-700">{project?.author_name || ''}</p>
+            
+            <p className="text-sm font-medium self-start">Description:</p>
+            <p className="text-sm text-gray-700 max-w-[500px] whitespace-normal break-words">{project?.description || ''}</p>
+            
+            {projectStatus && (
+              <>
+                <p className="text-sm font-medium">Project Status:</p>
+                <p className="text-sm">
+                  <span className="bg-green-50 text-green-700 px-2 py-1 rounded-md">
+                    {projectStatus.Current_Status}
+                  </span>
+                </p>
+              </>
+            )}
           </div>
         </div>
+      </div>
+      
+      {/* Mode Toggle Buttons moved between project summary and tabs */}
+      <div className="flex justify-center gap-4 mb-2">
+        {/* Validation Mode Button */}
+        <button
+          onClick={() => setMode("validation")}
+          className={`relative w-40 h-14 rounded-md flex flex-col overflow-hidden transition-all duration-300 ${
+            mode === "validation" 
+              ? "shadow-[0_0_15px_rgba(59,130,246,0.5)]" 
+              : "shadow-md hover:shadow-lg"
+          }`}
+        >
+          {/* Button Background with Gradient */}
+          <div className={`absolute inset-0 ${
+            mode === "validation"
+              ? "bg-gradient-to-br from-blue-50 to-blue-100 border-2 border-blue-400"
+              : "bg-gradient-to-br from-gray-50 to-gray-100 border-2 border-gray-300 hover:border-gray-400"
+          } rounded-md transition-all duration-300`}></div>
+          
+          {/* LED Indicator Container */}
+          <div className="absolute top-0 left-0 right-0 h-2 bg-gray-200 rounded-t-sm overflow-hidden">
+            {/* LED Light Effect */}
+            <div 
+              className={`h-full w-full transition-all duration-300 ${
+                mode === "validation" 
+                  ? "bg-gradient-to-r from-green-400 to-green-500 shadow-[0_0_10px_rgba(74,222,128,0.8)]" 
+                  : "bg-gray-300"
+              }`}
+            ></div>
+          </div>
+          
+          {/* Button Content */}
+          <div className={`absolute inset-0 pt-3 flex flex-col items-center justify-center transition-all duration-300`}>
+            <span className={`font-semibold text-sm ${
+              mode === "validation" ? "text-blue-700" : "text-gray-500"
+            }`}>VALIDATION</span>
+            <span className={`text-xs mt-0.5 ${
+              mode === "validation" ? "text-blue-500" : "text-gray-400"
+            }`}>Limited Run</span>
+          </div>
+        </button>
+        
+        {/* Production Mode Button */}
+        <button
+          onClick={() => setMode("production")}
+          className={`relative w-40 h-14 rounded-md flex flex-col overflow-hidden transition-all duration-300 ${
+            mode === "production" 
+              ? "shadow-[0_0_15px_rgba(34,197,94,0.5)]" 
+              : "shadow-md hover:shadow-lg"
+          }`}
+        >
+          {/* Button Background with Gradient */}
+          <div className={`absolute inset-0 ${
+            mode === "production"
+              ? "bg-gradient-to-br from-green-50 to-green-100 border-2 border-green-400"
+              : "bg-gradient-to-br from-gray-50 to-gray-100 border-2 border-gray-300 hover:border-gray-400"
+          } rounded-md transition-all duration-300`}></div>
+          
+          {/* LED Indicator Container */}
+          <div className="absolute top-0 left-0 right-0 h-2 bg-gray-200 rounded-t-sm overflow-hidden">
+            {/* LED Light Effect */}
+            <div 
+              className={`h-full w-full transition-all duration-300 ${
+                mode === "production" 
+                  ? "bg-gradient-to-r from-green-400 to-green-500 shadow-[0_0_10px_rgba(74,222,128,0.8)]" 
+                  : "bg-gray-300"
+              }`}
+            ></div>
+          </div>
+          
+          {/* Button Content */}
+          <div className={`absolute inset-0 pt-3 flex flex-col items-center justify-center transition-all duration-300`}>
+            <span className={`font-semibold text-sm ${
+              mode === "production" ? "text-green-700" : "text-gray-500"
+            }`}>PRODUCTION</span>
+            <span className={`text-xs mt-0.5 ${
+              mode === "production" ? "text-green-500" : "text-gray-400"
+            }`}>Full Book</span>
+          </div>
+        </button>
       </div>
 
       <Tabs defaultValue={getInitialTab(projectStatus)} className="w-full">
