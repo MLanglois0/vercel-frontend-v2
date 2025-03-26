@@ -84,6 +84,7 @@ interface StoryboardItem {
       url: string
       path: string
     }
+    loadError?: boolean // Add this property to track load errors
   }
   audio?: {
     url: string
@@ -239,6 +240,41 @@ interface PronunciationCorrection {
   correctedPronunciation: string;
   ipaPronunciation: string;
 }
+
+// Add this helper function for diagnosing image loading issues
+const diagnoseImageLoadingError = (error: Error | unknown, imageUrl: string, itemNumber: number) => {
+  console.error(`Error loading image for item ${itemNumber}:`, error);
+  
+  // Check if it's a timeout error
+  const isTimeout = error instanceof Error && 
+    (error.name === 'TimeoutError' || 
+     error.message?.includes('timeout') ||
+     error.message?.includes('timed out'));
+  
+  if (isTimeout) {
+    console.warn(`Image timeout for item ${itemNumber}. Possible large file or network issues.`);
+    return 'Image load timed out';
+  }
+  
+  // Check for general network errors
+  const isNetworkError = !navigator.onLine || 
+    (error instanceof Error && error.message?.includes('network'));
+  
+  if (isNetworkError) {
+    console.warn(`Network error loading image for item ${itemNumber}.`);
+    return 'Network error';
+  }
+  
+  // Check for CORS issues
+  const isCors = error instanceof Error && error.message?.includes('CORS');
+  if (isCors) {
+    console.warn(`CORS error loading image for item ${itemNumber}.`);
+    return 'CORS error';
+  }
+  
+  // If no specific diagnosis, return general error
+  return 'Failed to load image';
+};
 
 export default function ProjectDetail() {
   const params = useParams()
@@ -495,14 +531,38 @@ export default function ProjectDetail() {
         console.error('Error loading NER data:', error)
       }
 
-      // Step 1: Get signed URLs for all files
-      const signedFiles = await getSignedImageUrls(session.user.id, project.id)
+      // Step 1: Get signed URLs for all files with retry logic
+      let signedFiles: Array<{
+        type: string;
+        path: string;
+        url: string;
+        content?: string;
+      }> = [];
+      let attempts = 0;
+      const maxAttempts = 3;
       
-      // Log all files first
-      // console.log('\n=== All Files ===')
-      // console.log('Total files:', signedFiles.length)
-      // signedFiles.forEach(file => console.log('File:', file.path))
-
+      while (attempts < maxAttempts) {
+        try {
+          signedFiles = await getSignedImageUrls(session.user.id, project.id);
+          break; // If successful, exit the loop
+        } catch (fetchError) {
+          attempts++;
+          if (fetchError instanceof Error && fetchError.name === 'TimeoutError') {
+            console.warn(`Attempt ${attempts}/${maxAttempts}: Timeout when fetching signed URLs. Retrying...`);
+            // Short delay before retry
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } else {
+            // If it's not a timeout error, rethrow
+            throw fetchError;
+          }
+        }
+      }
+      
+      if (attempts === maxAttempts) {
+        console.error('Maximum retry attempts reached when fetching signed URLs');
+        toast.error('Some images could not be loaded. Try refreshing the page.');
+      }
+      
       // Filter signed files based on file type and path
       const storyboardFiles = signedFiles.filter(file => {
         const isMatch = file.type === 'image' &&
@@ -1172,7 +1232,7 @@ export default function ProjectDetail() {
       const selectedVoiceData = voices.find(voice => voice.voice_id === selectedVoice);
       const voiceName = selectedVoiceData?.name || "Abe"; // Default to "Abe" if no voice selected or found
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 2 -si`
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 5 -si -m validation`
       await sendCommand(command)
       toast.success('Processing started')
     } catch (error) {
@@ -1375,7 +1435,7 @@ export default function ProjectDetail() {
         dictionaryParam = ` -pd "${masterDictionaryName}"`
       }
       
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -ss`
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -ss -m validation`
       await sendCommand(command)
       
       toast.success('Storyboard generation started. This may take a few minutes.')
@@ -1430,7 +1490,7 @@ export default function ProjectDetail() {
       // Log the dictionary parameter for debugging
       console.log(`Sending audiobook command with dictionary parameter: ${dictionaryParam || 'none'}`)
 
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -sb`
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -sb -m validation`
       await sendCommand(command)
       toast.success('Generation started')
     } catch (error) {
@@ -3067,17 +3127,59 @@ export default function ProjectDetail() {
                               </div>
                             ) : item.image?.url ? (
                               <div className="relative w-full h-[597px]">
+                                {item.image?.loadError ? (
+                                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-100">
+                                    <p className="text-red-500 mb-2">Error: {diagnoseImageLoadingError(null, item.image?.url || '', item.number)}</p>
+                                    <p className="text-xs text-gray-500 mb-2">The image might be too large or corrupted</p>
+                                    <Button 
+                                      variant="outline" 
+                                      onClick={() => {
+                                        // Clear the error flag and force a re-render
+                                        const updatedItems = [...items];
+                                        const itemIndex = updatedItems.findIndex(i => i.number === item.number);
+                                        if (itemIndex !== -1 && updatedItems[itemIndex].image) {
+                                          updatedItems[itemIndex].image!.loadError = false;
+                                          setItems(updatedItems);
+                                        }
+                                      }}
+                                      size="sm"
+                                    >
+                                      Retry
+                                    </Button>
+                                  </div>
+                                ) : null}
                                 <Image 
                                   src={item.image.url} 
                                   alt={`Storyboard ${item.number}`}
                                   fill
                                   className={`object-cover rounded ${
-                                    swappingImages.has(item.image.path) ? 'opacity-50' : ''
-                                  }`}
+                                    item.image.path && swappingImages.has(item.image.path) ? 'opacity-50' : ''
+                                  }${item.image.loadError ? ' hidden' : ''}`}
                                   priority={item.number <= 2}
                                   sizes="(max-width: 768px) 100vw, 341px"
+                                  onError={(e) => {
+                                    // Get error message but don't assign to variable since we use it directly
+                                    diagnoseImageLoadingError(e, item.image?.url || '', item.number);
+                                    
+                                    // Mark this item as having a load error
+                                    const updatedItems = [...items];
+                                    const itemIndex = updatedItems.findIndex(i => i.number === item.number);
+                                    if (itemIndex !== -1 && updatedItems[itemIndex].image) {
+                                      updatedItems[itemIndex].image!.loadError = true;
+                                      setItems(updatedItems);
+                                    }
+
+                                    // Try to reload the image by updating its URL with a cache-busting query param
+                                    const target = e.target as HTMLImageElement;
+                                    if (target && target.src) {
+                                      const newSrc = target.src.includes('?') 
+                                        ? `${target.src}&retry=${Date.now()}` 
+                                        : `${target.src}?retry=${Date.now()}`;
+                                      target.src = newSrc;
+                                    }
+                                  }}
                                 />
-                                {swappingImages.has(item.image.path) && (
+                                {item.image.path && swappingImages.has(item.image.path) && (
                                   <div className="absolute inset-0 flex items-center justify-center">
                                     <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent" />
                                   </div>
