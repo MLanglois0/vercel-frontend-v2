@@ -25,7 +25,8 @@ import {
   getVoiceDataFile,
   getNerDataFile,
   saveJsonToR2,
-  getJsonFromR2
+  getJsonFromR2,
+  copyHlsStreamingFiles
 } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
@@ -55,6 +56,7 @@ interface Project {
   voice_name?: string
   pls_dict_name?: string
   pls_dict_file?: string
+  is_production_mode?: boolean
 }
 
 interface Voice {
@@ -155,27 +157,28 @@ interface NerDataFromApi {
 function getInitialTab(status: ProjectStatus | null) {
   if (!status) return 'intake'
 
-  const isIntakeComplete = status.Ebook_Prep_Status === "Ebook Processing Complete"
-  const isStoryboardComplete = status.Storyboard_Status === "Storyboard Complete"
-  const isProofsComplete = status.Proof_Status === "Proofs Complete"
-
-  // New behavior: Land on the tab that has a complete status, in this order: Intake, Storyboard, Proofs
-  // If all are complete, prioritize Audiobook
-  if (isIntakeComplete && isStoryboardComplete && isProofsComplete) {
-    return 'audiobook'  // Return the audiobook tab (previously publish)
+  // Check each status in reverse order (most advanced to least)
+  // If Audiobook is complete, show that tab
+  if (status.Audiobook_Status === "Audiobook Complete") {
+    return 'audiobook'
   }
   
-  // If only ebook and storyboard are complete, land on storyboard
-  if (isIntakeComplete && isStoryboardComplete) {
+  // If Proofs are complete, show proofs tab
+  if (status.Proof_Status === "Proofs Complete") {
+    return 'proofs'
+  }
+  
+  // If Storyboard is complete, show storyboard tab
+  if (status.Storyboard_Status === "Storyboard Complete") {
     return 'storyboard'
   }
   
-  // If only ebook is complete, land on intake
-  if (isIntakeComplete) {
+  // If Ebook processing is complete, show intake tab
+  if (status.Ebook_Prep_Status === "Ebook Processing Complete") {
     return 'intake'
   }
 
-  // If no tab is complete, default to intake
+  // Default to intake tab if nothing is complete
   return 'intake'
 }
 
@@ -370,10 +373,139 @@ export default function ProjectDetail() {
   const [isHlsMuted, setIsHlsMuted] = useState(false);
   const [hlsProgress, setHlsProgress] = useState(0);
 
+  // Add state for production mode confirmation dialog
+  const [isProductionConfirmOpen, setIsProductionConfirmOpen] = useState(false);
+  const [isActivatingProduction, setIsActivatingProduction] = useState(false);
+
   // Log mode changes
   useEffect(() => {
     console.log(`Mode changed to: ${mode}`)
   }, [mode])
+
+  // Set initial mode based on project metadata
+  useEffect(() => {
+    if (project?.is_production_mode) {
+      setMode("production");
+    }
+  }, [project]);
+
+  // Check if production mode can be enabled
+  const canEnableProductionMode = useCallback(() => {
+    return projectStatus?.Audiobook_Status === "Audiobook Complete";
+  }, [projectStatus?.Audiobook_Status]);
+
+  // Add function to handle production mode activation
+  const handleProductionModeToggle = () => {
+    // Check if production mode can be enabled
+    if (!canEnableProductionMode()) {
+      toast.error("Please complete the validation run before engaging production mode");
+      return;
+    }
+    
+    // Show confirmation dialog
+    setIsProductionConfirmOpen(true);
+  };
+
+  // Function to process the production mode activation
+  const processProductionModeActivation = async () => {
+    try {
+      setIsActivatingProduction(true);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('No session');
+      if (!project) throw new Error('Project not found');
+
+      // Close the confirmation dialog
+      setIsProductionConfirmOpen(false);
+      
+      toast.info("Preparing production mode. This may take a few moments...");
+
+      // Set mode to production
+      setMode("production");
+      
+      // Update project metadata to reflect production mode
+      const { error: updateError } = await supabase
+        .from('projects')
+        .update({
+          is_production_mode: true
+        })
+        .eq('id', project.id);
+        
+      if (updateError) {
+        console.error('Error updating project mode:', updateError);
+      }
+      
+      // Copy files from validation hls location to production hls location
+      // In validation mode: <userid>/<projectid>/streaming
+      // In production mode: streaming_assets/<userid>/<projectid>
+      const validationHlsPath = `${session.user.id}/${project.id}/streaming`;
+      const productionHlsPath = `streaming_assets/${session.user.id}/${project.id}`;
+
+      console.log(`Copying HLS files from ${validationHlsPath} to ${productionHlsPath}`);
+      
+      // Copy the HLS streaming files from validation to production path
+      const copyResult = await copyHlsStreamingFiles({
+        userId: session.user.id,
+        projectId: project.id
+      });
+      
+      if (!copyResult.success) {
+        console.log(`No HLS files to copy or copy failed: ${copyResult.error}`);
+        // Continue with the process even if copying fails
+      }
+
+      // Update project status for storyboard processing
+      await updateProjectStatus({
+        userId: session.user.id,
+        projectId: project.id,
+        status: {
+          Project: project.project_name,
+          Book: project.book_title,
+          notify: session.user.email || '',
+          userid: session.user.id,
+          projectid: project.id,
+          Current_Status: "Storyboard is Processing",
+          Ebook_Prep_Status: "Ebook Processing Complete", // Assuming intake is already done
+          Storyboard_Status: "Processing Storyboard, Please Wait",
+          Proof_Status: "Waiting for Storyboard Completion",
+          Audiobook_Status: "Not Started"
+        }
+      });
+
+      // Force immediate status refresh
+      await fetchProject();
+
+      // Extract filename from epub_file_path
+      const epubFilename = project.epub_file_path.split('/').pop();
+      if (!epubFilename) throw new Error('EPUB filename not found');
+
+      // Use the author_name and book_title from the project
+      const authorName = project.author_name || "Mike Langlois";
+      const bookTitle = project.book_title || "Walker";
+
+      // Get the voice name
+      const voiceName = project.voice_name || "Abe";
+
+      // Use the master pronunciation dictionary if available
+      let dictionaryParam = "";
+      if (project.pls_dict_name) {
+        dictionaryParam = ` -pd "${masterDictionaryName}"`;
+      }
+
+      // Run storyboard generation in production mode
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -ss -m production`;
+      await sendCommand(command);
+      
+      toast.success('Production mode activated. Storyboard generation started.');
+      
+    } catch (error) {
+      console.error('Error activating production mode:', error);
+      toast.error('Failed to activate production mode');
+      // Reset mode to validation if there's an error
+      setMode("validation");
+    } finally {
+      setIsActivatingProduction(false);
+    }
+  };
 
   // Update fetchHlsPath to use our proxy endpoint for HLS streaming
   const fetchHlsPath = useCallback(async () => {
@@ -510,10 +642,8 @@ export default function ProjectDetail() {
       // Set mode-specific parameters
       const modeParam = mode === "validation" ? "validation" : "production"
       
-      // In validation mode, use -l 5, in production mode, omit -l parameter entirely
-      const limitParam = mode === "validation" ? " -l 2" : "-l 5"
-      
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${limitParam} -si -m ${modeParam}`
+      // Remove the -l parameter for intake, as it should always process the entire book
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -si -m ${modeParam}`
       await sendCommand(command)
       toast.success('Processing started')
     } catch (error) {
@@ -720,8 +850,8 @@ export default function ProjectDetail() {
       // Set mode-specific parameters
       const modeParam = mode === "validation" ? "validation" : "production"
       
-      // In validation mode, use -l 2, in production mode, omit -l parameter entirely
-      const limitParam = mode === "validation" ? " -l 2" : "-l 5"
+      // Add the -l parameter with appropriate value based on mode
+      const limitParam = mode === "validation" ? " -l 2" : " -l 5"
       
       const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam}${limitParam} -ss -m ${modeParam}`
       await sendCommand(command)
@@ -753,11 +883,11 @@ export default function ProjectDetail() {
           notify: session.user.email || '',
           userid: session.user.id,
           projectid: project.id,
-          Current_Status: "Audiobook is Processing",
+          Current_Status: "Proofs are Processing",
           Ebook_Prep_Status: "Ebook Processing Complete",
           Storyboard_Status: "Storyboard Complete",
           Proof_Status: "Audiobook Processing, Please Wait",
-          Audiobook_Status: "Not Started"
+          Audiobook_Status: "Processing Audiobook, Please Wait"
         }
       })
 
@@ -782,8 +912,8 @@ export default function ProjectDetail() {
       // Set mode-specific parameters
       const modeParam = mode === "validation" ? "validation" : "production"
       
-      // In validation mode, use -l 2, in production mode, omit -l parameter entirely
-      const limitParam = mode === "validation" ? " -l 2" : "-l 5"
+      // Add the -l parameter with appropriate value based on mode
+      const limitParam = mode === "validation" ? " -l 2" : " -l 5"
       
       const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam}${limitParam} -sb -m ${modeParam}`
       await sendCommand(command)
@@ -1066,8 +1196,10 @@ export default function ProjectDetail() {
         })
         
         if (status && isPolling) {
-          const wasProcessing = projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait"
-          const isComplete = status.Storyboard_Status === "Storyboard Complete"
+          const wasProcessing = projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait" ||
+                              projectStatus?.Proof_Status === "Audiobook Processing, Please Wait"
+          const isComplete = status.Storyboard_Status === "Storyboard Complete" ||
+                           status.Proof_Status === "Proofs Complete"
           
           setProjectStatus(status)
           
@@ -1089,7 +1221,7 @@ export default function ProjectDetail() {
         clearInterval(pollingInterval)
       }
     }
-  }, [project, projectStatus?.Storyboard_Status, fetchProject])
+  }, [project, projectStatus?.Storyboard_Status, projectStatus?.Proof_Status, fetchProject])
 
   // Add a useEffect to monitor project status changes
   useEffect(() => {
@@ -2367,7 +2499,7 @@ export default function ProjectDetail() {
           notify: session.user.email || '',
           userid: session.user.id,
           projectid: project.id,
-          Current_Status: "Final Audiobook is Processing",
+          Current_Status: "Audiobook is Processing",
           Ebook_Prep_Status: "Ebook Processing Complete",
           Storyboard_Status: "Storyboard Complete",
           Proof_Status: "Proofs Complete",
@@ -2391,17 +2523,17 @@ export default function ProjectDetail() {
       }
 
       // Log the dictionary parameter for debugging
-      console.log(`Sending final audiobook command with dictionary parameter: ${dictionaryParam || 'none'}`)
+      console.log(`Sending audiobook command with dictionary parameter: ${dictionaryParam || 'none'}`)
 
       // Set mode-specific parameters
       const modeParam = mode === "validation" ? "validation" : "production"
       
-      // In validation mode, use -l 2, in production mode, omit -l parameter entirely
-      const limitParam = mode === "validation" ? " -l 2" : "-l 5"
+      // Add the -l parameter with appropriate value based on mode
+      const limitParam = mode === "validation" ? " -l 2" : " -l 5"
       
       const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam}${limitParam} -sp -m ${modeParam}`
       await sendCommand(command)
-      toast.success('Final audiobook generation started')
+      toast.success('Audiobook generation started')
     } catch (error) {
       console.error('Error generating final audiobook:', error)
       toast.error('Failed to start final audiobook generation')
@@ -2523,8 +2655,11 @@ export default function ProjectDetail() {
           className={`relative w-40 h-14 rounded-md flex flex-col overflow-hidden transition-all duration-300 ${
             mode === "validation" 
               ? "shadow-[0_0_15px_rgba(59,130,246,0.5)]" 
-              : "shadow-md hover:shadow-lg"
+              : mode === "production"
+                ? "shadow-md opacity-50 cursor-not-allowed"
+                : "shadow-md hover:shadow-lg"
           }`}
+          disabled={mode === "production"} // Once in production mode, can't go back
         >
           {/* Button Background with Gradient */}
           <div className={`absolute inset-0 ${
@@ -2558,18 +2693,23 @@ export default function ProjectDetail() {
         
         {/* Production Mode Button */}
         <button
-          onClick={() => setMode("production")}
+          onClick={handleProductionModeToggle}
           className={`relative w-40 h-14 rounded-md flex flex-col overflow-hidden transition-all duration-300 ${
             mode === "production" 
               ? "shadow-[0_0_15px_rgba(34,197,94,0.5)]" 
-              : "shadow-md hover:shadow-lg"
+              : canEnableProductionMode() 
+                ? "shadow-md hover:shadow-lg cursor-pointer" 
+                : "shadow-md opacity-60 cursor-not-allowed"
           }`}
+          disabled={mode === "production" || isActivatingProduction || !canEnableProductionMode()}
         >
           {/* Button Background with Gradient */}
           <div className={`absolute inset-0 ${
             mode === "production"
               ? "bg-gradient-to-br from-green-50 to-green-100 border-2 border-green-400"
-              : "bg-gradient-to-br from-gray-50 to-gray-100 border-2 border-gray-300 hover:border-gray-400"
+              : canEnableProductionMode()
+                ? "bg-gradient-to-br from-gray-50 to-gray-100 border-2 border-gray-300 hover:border-gray-400"
+                : "bg-gradient-to-br from-gray-50 to-gray-100 border-2 border-gray-300"
           } rounded-md transition-all duration-300`}></div>
           
           {/* LED Indicator Container */}
@@ -2592,6 +2732,11 @@ export default function ProjectDetail() {
             <span className={`text-xs mt-0.5 ${
               mode === "production" ? "text-green-500" : "text-gray-400"
             }`}>Full Book</span>
+            {isActivatingProduction && (
+              <div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center">
+                <div className="animate-spin h-4 w-4 border-2 border-white rounded-full border-t-transparent"></div>
+              </div>
+            )}
           </div>
         </button>
       </div>
@@ -2711,10 +2856,19 @@ export default function ProjectDetail() {
                   </div>
                   
                   {/* Voice Selection Section - Conditionally enabled */}
-                  <div className={`space-y-4 border p-4 rounded-md ${projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" ? 'opacity-50' : ''}`}>
+                  <div className={`space-y-4 border p-4 rounded-md ${
+                    projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" || mode === "production" 
+                      ? 'opacity-50' 
+                      : ''
+                  }`}>
                     <h3 className="text-md font-medium">Voice Selection</h3>
                     <p className="text-sm text-gray-600">
                       Select a voice that will be used to create the storyboard files.
+                      {mode === "production" && (
+                        <span className="block mt-1 text-amber-600">
+                          Voice selection is locked in production mode.
+                        </span>
+                      )}
                     </p>
                     
                     {/* Show currently selected voice if one is saved */}
@@ -2727,7 +2881,7 @@ export default function ProjectDetail() {
                         <button
                           onClick={() => setIsVoiceConfirmOpen(true)}
                           className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700"
-                          disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
+                          disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" || mode === "production"}
                         >
                           Change
                         </button>
@@ -2746,7 +2900,7 @@ export default function ProjectDetail() {
                           value={selectedVoice}
                           onChange={(e) => setSelectedVoice(e.target.value)}
                           className="w-full p-2 border rounded"
-                          disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
+                          disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" || mode === "production"}
                         >
                           {voices.length === 0 ? (
                             <option value="">No voices available</option>
@@ -2762,7 +2916,14 @@ export default function ProjectDetail() {
                       
                       <button
                         onClick={playVoicePreview}
-                        disabled={!selectedVoice || voices.length === 0 || isPlayingPreview || !voices.find(v => v.voice_id === selectedVoice)?.preview_url || projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
+                        disabled={
+                          !selectedVoice || 
+                          voices.length === 0 || 
+                          isPlayingPreview || 
+                          !voices.find(v => v.voice_id === selectedVoice)?.preview_url || 
+                          projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" ||
+                          mode === "production"
+                        }
                         className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
                       >
                         {isPlayingPreview ? 'Playing...' : 'Play Preview'}
@@ -2808,7 +2969,8 @@ export default function ProjectDetail() {
                             disabled={
                               projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" || 
                               projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait" ||
-                              projectStatus?.Storyboard_Status === "Storyboard Complete"
+                              projectStatus?.Storyboard_Status === "Storyboard Complete" ||
+                              mode === "production"
                             }
                           >
                             {projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait" || 
@@ -2825,15 +2987,19 @@ export default function ProjectDetail() {
                 {/* Right Column */}
                 <div>
                   {/* Name Pronunciation Section - Conditionally enabled */}
-                  <div className={`space-y-4 border p-4 rounded-md ${projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" ? 'opacity-50' : ''}`}>
+                  <div className={`space-y-4 border p-4 rounded-md ${
+                    projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" || mode === "production" 
+                      ? 'opacity-50' 
+                      : ''
+                  }`}>
                     <div className="flex justify-between items-center">
                       <h3 className="text-md font-medium">Name Pronunciation</h3>
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => setIsViewCorrectionsOpen(true)}
-                        disabled={pronunciationCorrections.length === 0}
-                        className={pronunciationCorrections.length > 0 ? 
+                        disabled={pronunciationCorrections.length === 0 || mode === "production"}
+                        className={pronunciationCorrections.length > 0 && mode !== "production" ? 
                           "bg-green-600 text-white hover:bg-green-700 border-green-500" : 
                           ""}
                       >
@@ -2842,6 +3008,11 @@ export default function ProjectDetail() {
                     </div>
                     <p className="text-sm text-gray-600">
                       View pronunciation guides for names and entities in your book. Only correct the pronunciation if needed, otherwise simply check to ensure unusual names sound as you intended.
+                      {mode === "production" && (
+                        <span className="block mt-1 text-amber-600">
+                          Pronunciation editing is locked in production mode.
+                        </span>
+                      )}
                     </p>
                     
                     {nerData ? (
@@ -2852,7 +3023,7 @@ export default function ProjectDetail() {
                               value={selectedNameEntity}
                               onChange={(e) => setSelectedNameEntity(e.target.value)}
                               className="w-full p-2 border rounded"
-                              disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
+                              disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" || mode === "production"}
                             >
                               <option value="">Select a name or entity</option>
                               
@@ -2962,7 +3133,7 @@ export default function ProjectDetail() {
                                 playNameAudio(selectedEntity.name)
                               }
                             }}
-                            disabled={isPlayingNameAudio || !selectedNameEntity || !selectedVoice}
+                            disabled={isPlayingNameAudio || !selectedNameEntity || !selectedVoice || mode === "production"}
                             className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
                           >
                             {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
@@ -3044,6 +3215,7 @@ export default function ProjectDetail() {
                                 placeholder="Enter a phonetic spelling"
                                 id="test-name-input"
                                 className="w-full p-2 border rounded"
+                                disabled={mode === "production"}
                               />
                             </div>
                             <div className="flex gap-2">
@@ -3056,7 +3228,7 @@ export default function ProjectDetail() {
                                     toast.error('Please enter a name')
                                   }
                                 }}
-                                disabled={isPlayingNameAudio || !selectedVoice}
+                                disabled={isPlayingNameAudio || !selectedVoice || mode === "production"}
                                 className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
                               >
                                 {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
@@ -3070,14 +3242,14 @@ export default function ProjectDetail() {
                                     toast.error('Please enter a name')
                                   }
                                 }}
-                                disabled={isLoadingIpa}
+                                disabled={isLoadingIpa || mode === "production"}
                                 className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-400"
                               >
                                 {isLoadingIpa ? 'Loading...' : 'Get IPA'}
                               </button>
                               <button
                                 onClick={() => confirmIpaForAudiobook('corrected')}
-                                disabled={!gptIpaPronunciation || isUseIpaButtonDisabled}
+                                disabled={!gptIpaPronunciation || isUseIpaButtonDisabled || mode === "production"}
                                 className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400"
                               >
                                 Use this IPA
@@ -3120,6 +3292,7 @@ export default function ProjectDetail() {
                                 placeholder="Enter Name"
                                 id="book-name-input"
                                 className="w-full p-2 border rounded"
+                                disabled={mode === "production"}
                               />
                             </div>
                             <div className="flex gap-2 mt-6">
@@ -3132,7 +3305,7 @@ export default function ProjectDetail() {
                                     toast.error('Please enter a name')
                                   }
                                 }}
-                                disabled={isPlayingNameAudio || !selectedVoice}
+                                disabled={isPlayingNameAudio || !selectedVoice || mode === "production"}
                                 className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
                               >
                                 {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
@@ -3148,6 +3321,7 @@ export default function ProjectDetail() {
                                 placeholder="Add Pronunciation if Needed"
                                 id="new-name-input"
                                 className="w-full p-2 border rounded"
+                                disabled={mode === "production"}
                               />
                             </div>
                             <div className="flex gap-2 mt-6">
@@ -3160,7 +3334,7 @@ export default function ProjectDetail() {
                                     toast.error('Please enter a name')
                                   }
                                 }}
-                                disabled={isPlayingNameAudio || !selectedVoice}
+                                disabled={isPlayingNameAudio || !selectedVoice || mode === "production"}
                                 className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
                               >
                                 {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
@@ -3174,14 +3348,14 @@ export default function ProjectDetail() {
                                     toast.error('Please enter a name')
                                   }
                                 }}
-                                disabled={isLoadingNewNameIpa}
+                                disabled={isLoadingNewNameIpa || mode === "production"}
                                 className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-400"
                               >
                                 {isLoadingNewNameIpa ? 'Loading...' : 'Get IPA'}
                               </button>
                               <button
                                 onClick={() => confirmIpaForAudiobook('newName')}
-                                disabled={!newNameIpaPronunciation || isNewNameUseIpaButtonDisabled}
+                                disabled={!newNameIpaPronunciation || isNewNameUseIpaButtonDisabled || mode === "production"}
                                 className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400"
                               >
                                 Use this IPA
@@ -3257,7 +3431,9 @@ export default function ProjectDetail() {
                     ref={scrollContainerRef}
                     className="flex gap-4 overflow-x-auto pb-4 scroll-smooth"
                   >
-                    {items.map((item) => (
+                    {items
+                      .filter(item => item.image?.url || item.audio?.url) // Only show items with image or audio
+                      .map((item) => (
                       <Card key={item.number} className="flex-shrink-0 w-[341px]">
                         <CardContent className="p-2 space-y-2">
                           <div className="relative">
@@ -4151,6 +4327,43 @@ export default function ProjectDetail() {
             </Button>
             <Button onClick={processStoryboardGeneration}>
               Proceed
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      
+      {/* Production Mode Confirmation Dialog */}
+      <Dialog open={isProductionConfirmOpen} onOpenChange={setIsProductionConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Activate Production Mode</DialogTitle>
+            <DialogDescription>
+              Once production mode is enabled, you cannot return to validation mode. Production mode will create a storyboard for your entire book, and return you to that point in the process. You will be able to work with the storyboard as normal.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <div className="p-3 bg-yellow-50 rounded-md text-yellow-800 text-sm">
+              <p className="font-medium">Important:</p>
+              <p>This action will restart the process from the beginning but will process your entire book instead of a sample.</p>
+            </div>
+          </div>
+          <DialogFooter className="flex justify-between sm:justify-end gap-2">
+            <Button variant="outline" onClick={() => setIsProductionConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={processProductionModeActivation} 
+              disabled={isActivatingProduction}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              {isActivatingProduction ? (
+                <>
+                  <span className="mr-2">Activating...</span>
+                  <div className="animate-spin h-4 w-4 border-2 border-white rounded-full border-t-transparent"></div>
+                </>
+              ) : (
+                "Proceed"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

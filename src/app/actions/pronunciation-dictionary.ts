@@ -152,17 +152,10 @@ export async function getProjectPronunciationRules({
 // Function to remove rules from the ElevenLabs dictionary
 export async function removeRulesFromElevenLabsDictionary(
   dictionaryId: string,
-  rulesToRemove: Array<{ string_to_replace: string }>,
-  versionId: string
+  rules: { string_to_replace: string }[],
+  versionId?: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Only proceed if there are rules to remove
-    if (!rulesToRemove || rulesToRemove.length === 0) {
-      console.log('No rules to remove from ElevenLabs dictionary')
-      return { success: true }
-    }
-
-    // Use the API key from environment variables
     const apiKey = process.env.ELEVEN_API_KEY
     if (!apiKey) {
       console.error('ElevenLabs API key is not configured')
@@ -172,18 +165,41 @@ export async function removeRulesFromElevenLabsDictionary(
       }
     }
 
-    // Transform the rules to just strings as required by the API
-    const rule_strings = rulesToRemove.map(rule => rule.string_to_replace)
+    // If no version ID provided, get the latest version
+    if (!versionId) {
+      const response = await fetch(
+        `https://api.elevenlabs.io/v1/pronunciation-dictionaries/${dictionaryId}`,
+        {
+          headers: {
+            'xi-api-key': apiKey,
+            'Content-Type': 'application/json',
+          },
+          signal: AbortSignal.timeout(30000) // 30 second timeout
+        }
+      )
+
+      if (!response.ok) {
+        console.error('Error getting dictionary info:', response.statusText)
+        return { 
+          success: false, 
+          error: `Failed to get dictionary info: ${response.status} ${response.statusText}`
+        }
+      }
+
+      const dictionaryInfo = await response.json()
+      versionId = dictionaryInfo.latest_version_id
+    }
 
     console.log('==================================================')
-    console.log('DEBUG: REMOVING RULES FROM ELEVENLABS DICTIONARY')
+    console.log('DEBUG: REMOVING RULES FROM DICTIONARY')
     console.log('==================================================')
     console.log('Dictionary ID:', dictionaryId)
     console.log('Version ID:', versionId)
-    console.log('Rules to remove count:', rule_strings.length)
-    console.log('Rules to remove:', JSON.stringify(rule_strings, null, 2))
+    console.log('Rules to remove:', rules)
 
-    // Call the ElevenLabs API to remove rules - correct endpoint is /remove-rules
+    // Format the rules for removal
+    const rule_strings = rules.map(rule => rule.string_to_replace)
+
     const response = await fetch(
       `https://api.elevenlabs.io/v1/pronunciation-dictionaries/${dictionaryId}/remove-rules`,
       {
@@ -193,7 +209,8 @@ export async function removeRulesFromElevenLabsDictionary(
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ 
-          rule_strings: rule_strings
+          rule_strings,
+          version_id: versionId // Include the version ID
         }),
         signal: AbortSignal.timeout(30000) // 30 second timeout
       }
@@ -213,13 +230,10 @@ export async function removeRulesFromElevenLabsDictionary(
       }
     }
 
-    // Parse the response
-    const data = await response.json()
     console.log('==================================================')
     console.log('DEBUG: RULES REMOVED SUCCESSFULLY')
     console.log('==================================================')
-    console.log('Response data:', JSON.stringify(data, null, 2))
-    
+
     return { success: true }
   } catch (error) {
     console.error('Error removing rules from dictionary:', error)
@@ -370,6 +384,29 @@ export async function addRulesToMasterDictionary(
     // Get the master dictionary info
     const { id: dictionaryId } = await getMasterDictionaryInfo()
 
+    // First, get the latest version of the dictionary
+    const response = await fetch(
+      `https://api.elevenlabs.io/v1/pronunciation-dictionaries/${dictionaryId}`,
+      {
+        headers: {
+          'xi-api-key': apiKey,
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(30000) // 30 second timeout
+      }
+    )
+
+    if (!response.ok) {
+      console.error('Error getting dictionary info:', response.statusText)
+      return { 
+        success: false, 
+        error: `Failed to get dictionary info: ${response.status} ${response.statusText}`
+      }
+    }
+
+    const dictionaryInfo = await response.json()
+    const latestVersionId = dictionaryInfo.latest_version_id
+
     // Transform corrections to the format expected by the API
     const rules = pronunciationCorrections.map(correction => {
       // Format the IPA phoneme with forward slashes if they're not already present
@@ -393,11 +430,12 @@ export async function addRulesToMasterDictionary(
     console.log('DEBUG: ADDING RULES TO MASTER DICTIONARY')
     console.log('==================================================')
     console.log('Dictionary ID:', dictionaryId)
+    console.log('Latest Version ID:', latestVersionId)
     console.log('Rules count:', rules.length)
 
     try {
-      // Send the request to add rules to the dictionary
-      const response = await fetch(
+      // Send the request to add rules to the dictionary with version ID
+      const addRulesResponse = await fetch(
         `https://api.elevenlabs.io/v1/pronunciation-dictionaries/${dictionaryId}/add-rules`,
         {
           method: 'POST',
@@ -405,13 +443,16 @@ export async function addRulesToMasterDictionary(
             'xi-api-key': apiKey,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ rules }),
+          body: JSON.stringify({ 
+            rules,
+            version_id: latestVersionId // Include the latest version ID
+          }),
           signal: AbortSignal.timeout(30000) // 30 second timeout
         }
       )
 
-      if (!response.ok) {
-        let errorData = await response.text()
+      if (!addRulesResponse.ok) {
+        let errorData = await addRulesResponse.text()
         try {
           errorData = JSON.parse(errorData)
         } catch {
@@ -420,12 +461,12 @@ export async function addRulesToMasterDictionary(
         console.error('Error adding rules to dictionary:', errorData)
         return { 
           success: false, 
-          error: `Failed to add rules: ${response.status} ${response.statusText}`
+          error: `Failed to add rules: ${addRulesResponse.status} ${addRulesResponse.statusText}`
         }
       }
 
       // Parse the response
-      const data = await response.json()
+      const data = await addRulesResponse.json()
       console.log('==================================================')
       console.log('DEBUG: RULES ADDED SUCCESSFULLY')
       console.log('==================================================')
@@ -434,7 +475,7 @@ export async function addRulesToMasterDictionary(
       return {
         success: true,
         dictionaryId: data.id,
-        versionId: data.version_id
+        versionId: data.version_id || latestVersionId // Use the new version ID or fall back to latest
       }
     } catch (error) {
       console.error('Error adding rules to dictionary:', error)

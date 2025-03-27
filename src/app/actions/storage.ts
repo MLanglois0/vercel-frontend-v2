@@ -960,3 +960,64 @@ export async function getSignedStreamUrl(path: string): Promise<string> {
   }
 }
 
+/**
+ * Copy HLS streaming files between validation and production paths
+ */
+export async function copyHlsStreamingFiles({
+  userId,
+  projectId
+}: {
+  userId: string
+  projectId: string
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Define source (validation) and destination (production) paths
+    const validationPrefix = `${userId}/${projectId}/streaming/`;
+    const productionPrefix = `streaming_assets/${userId}/${projectId}/`;
+    
+    console.log(`Starting copy from ${validationPrefix} to ${productionPrefix}`);
+    
+    // List all files in the validation streaming directory
+    const listCommand = new ListObjectsV2Command({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Prefix: validationPrefix,
+      MaxKeys: 1000
+    });
+    
+    const { Contents } = await r2Client.send(listCommand);
+    
+    if (!Contents || Contents.length === 0) {
+      console.log('No HLS streaming files found in validation path:', validationPrefix);
+      return { success: false, error: 'No streaming files found' };
+    }
+    
+    console.log(`Found ${Contents.length} streaming files to copy`);
+    
+    // Copy each file to the production path
+    for (const file of Contents) {
+      if (!file.Key) continue;
+      
+      // Calculate the destination key by replacing the prefix
+      const destinationKey = file.Key.replace(validationPrefix, productionPrefix);
+      
+      console.log(`Copying ${file.Key} to ${destinationKey}`);
+      
+      // Copy the file
+      await r2Client.send(new CopyObjectCommand({
+        Bucket: process.env.R2_BUCKET_NAME,
+        CopySource: `${process.env.R2_BUCKET_NAME}/${file.Key}`,
+        Key: destinationKey,
+      }));
+    }
+    
+    console.log(`Successfully copied ${Contents.length} HLS streaming files`);
+    return { success: true };
+  } catch (error) {
+    console.error('Error copying HLS streaming files:', error);
+    return { 
+      success: false, 
+      error: getUserFriendlyError(error)
+    };
+  }
+}
+
