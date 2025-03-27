@@ -370,6 +370,11 @@ export default function ProjectDetail() {
   const [isHlsMuted, setIsHlsMuted] = useState(false);
   const [hlsProgress, setHlsProgress] = useState(0);
 
+  // Log mode changes
+  useEffect(() => {
+    console.log(`Mode changed to: ${mode}`)
+  }, [mode])
+
   // Update fetchHlsPath to use our proxy endpoint for HLS streaming
   const fetchHlsPath = useCallback(async () => {
     if (!project) return
@@ -386,6 +391,18 @@ export default function ProjectDetail() {
       
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
+      
+      // Determine HLS path based on mode
+      // In validation mode: <userid>/<projectid>/streaming
+      // In production mode: streaming_assets/<userid>/<projectid>
+      let hlsBasePath = "";
+      if (mode === "validation") {
+        hlsBasePath = `${session.user.id}/${project.id}/streaming`;
+      } else {
+        hlsBasePath = `streaming_assets/${session.user.id}/${project.id}`;
+      }
+      
+      console.log(`Looking for HLS in path: ${hlsBasePath}`)
       
       // Query published_audiobooks table to get hls_path
       console.log(`Querying published_audiobooks for userid=${session.user.id} and projectid=${project.id}`)
@@ -410,6 +427,15 @@ export default function ProjectDetail() {
       if (data?.hls_path) {
         console.log('HLS path retrieved from database:', data.hls_path)
         
+        // Check if the path matches our expected path for the current mode
+        // If not, we may need to update our path based on the current mode
+        const storedPath = data.hls_path;
+        const adjustedPath = storedPath.includes(hlsBasePath) ? 
+                            storedPath : 
+                            `${hlsBasePath}/${storedPath.split('/').pop()}`;
+        
+        console.log(`Using HLS path: ${adjustedPath}`);
+        
         // Reset error state
         setHlsLoadError(null)
         
@@ -421,7 +447,7 @@ export default function ProjectDetail() {
           setHlsPath(null);
           
           // Generate the new stream URL
-          const streamUrl = await getHlsStreamUrl(data.hls_path)
+          const streamUrl = await getHlsStreamUrl(adjustedPath)
           console.log('HLS stream URL generated successfully')
           
           // Only set the URL after it's fully prepared
@@ -440,7 +466,333 @@ export default function ProjectDetail() {
     } finally {
       setIsPreparingHls(false);
     }
-  }, [project, hlsPath, hlsLoadError])
+  }, [project, hlsPath, hlsLoadError, mode])
+
+  // Update handleProcessEpub to use the mode
+  const handleProcessEpub = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No session')
+      if (!project) throw new Error('Project not found')
+
+      // Extract filename from epub_file_path
+      const epubFilename = project.epub_file_path.split('/').pop()
+      if (!epubFilename) throw new Error('EPUB filename not found')
+
+      await updateProjectStatus({
+        userId: session.user.id,
+        projectId: project.id,
+        status: {
+          Project: project.project_name,
+          Book: project.book_title,
+          notify: session.user.email || '',
+          userid: session.user.id,
+          projectid: project.id,
+          Current_Status: "Ebook is Processing",
+          Ebook_Prep_Status: "Processing Ebook File, Please Wait",
+          Storyboard_Status: "Waiting for Ebook Processing Completion",
+          Proof_Status: "Waiting for Storyboard Completion",
+          Audiobook_Status: "Not Started"
+        }
+      })
+
+      // Force immediate status refresh
+      await fetchProject()
+
+      // Use the author_name and book_title from the project
+      const authorName = project.author_name || "Mike Langlois"; // Default if not set
+      const bookTitle = project.book_title || "Walker"; // Use project book_title or default
+
+      // Get the selected voice name instead of ID
+      const selectedVoiceData = voices.find(voice => voice.voice_id === selectedVoice);
+      const voiceName = selectedVoiceData?.name || "Abe"; // Default to "Abe" if no voice selected or found
+
+      // Set mode-specific parameters
+      const modeParam = mode === "validation" ? "validation" : "production"
+      
+      // In validation mode, use -l 5, in production mode, omit -l parameter entirely
+      const limitParam = mode === "validation" ? " -l 2" : "-l 5"
+      
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${limitParam} -si -m ${modeParam}`
+      await sendCommand(command)
+      toast.success('Processing started')
+    } catch (error) {
+      console.error('Error processing epub:', error)
+      toast.error('Failed to start processing')
+    }
+  }
+
+  // Add function to play voice preview
+  const playVoicePreview = () => {
+    if (!audioRef.current) return
+    
+    const selectedVoiceData = voices.find(voice => voice.voice_id === selectedVoice)
+    if (!selectedVoiceData?.preview_url) return
+    
+    audioRef.current.src = selectedVoiceData.preview_url
+    audioRef.current.play()
+    setIsPlayingPreview(true)
+    
+    audioRef.current.onended = () => {
+      setIsPlayingPreview(false)
+    }
+  }
+
+  // Add function to play name audio using ElevenLabs API
+  const playNameAudio = async (name: string) => {
+    if (!nameAudioRef.current || isPlayingNameAudio) return
+    
+    try {
+      setIsPlayingNameAudio(true)
+      
+      // Always use the currently selected voice from the dropdown
+      const voiceId = selectedVoice
+      
+      if (!voiceId) {
+        toast.error('Please select a voice first')
+        setIsPlayingNameAudio(false)
+        return
+      }
+      
+      // Call the ElevenLabs API
+      const response = await fetch('/api/elevenlabs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text: name,
+          voiceId: voiceId,
+        }),
+      })
+      
+      if (!response.ok) {
+        throw new Error('Failed to generate speech')
+      }
+      
+      const data = await response.json()
+      
+      // Play the audio
+      nameAudioRef.current.src = `data:audio/mpeg;base64,${data.audio}`
+      nameAudioRef.current.play()
+      
+      nameAudioRef.current.onended = () => {
+        setIsPlayingNameAudio(false)
+      }
+    } catch (error) {
+      console.error('Error playing name audio:', error)
+      toast.error('Failed to play name audio')
+      setIsPlayingNameAudio(false)
+    }
+  }
+
+  const handleGenerateStoryboard = async () => {
+    // Check if voice is selected
+    if (!project?.voice_id) {
+      toast.error('Please select a voice first')
+      return
+    }
+    
+    // Set flag to update dictionary when generating storyboard
+    // This ensures dictionary updates happen only when explicitly requested
+    setShouldUpdateDictionary(true)
+    
+    // Show the confirmation dialog
+    setIsStoryboardConfirmOpen(true)
+  }
+  
+  // Create a helper function for mapping pronunciation corrections to the format needed by the API
+  const mapPronunciationCorrections = (corrections: PronunciationCorrection[]): Array<{
+    originalName: string;
+    ipaPronunciation: string;
+  }> => {
+    return corrections.map(correction => ({
+      originalName: correction.originalName,
+      ipaPronunciation: correction.ipaPronunciation
+    }))
+  }
+  
+  // Update processStoryboardGeneration to use the mode
+  const processStoryboardGeneration = async () => {
+    try {
+      // Close the confirmation dialog immediately
+      setIsStoryboardConfirmOpen(false)
+      
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No session')
+      if (!project) throw new Error('Project not found')
+      if (!project.voice_id) throw new Error('Voice not selected')
+      
+      // Set flag to update dictionary when generating storyboard
+      setShouldUpdateDictionary(true)
+      
+      // Extract filename from epub_file_path
+      const epubFilename = project.epub_file_path.split('/').pop()
+      if (!epubFilename) throw new Error('EPUB filename not found')
+
+      await updateProjectStatus({
+        userId: session.user.id,
+        projectId: project.id,
+        status: {
+          Project: project.project_name,
+          Book: project.book_title,
+          notify: session.user.email || '',
+          userid: session.user.id,
+          projectid: project.id,
+          Current_Status: "Storyboard is Processing",
+          Ebook_Prep_Status: "Ebook Processing Complete",
+          Storyboard_Status: "Processing Storyboard, Please Wait",
+          Proof_Status: "Waiting for Storyboard Completion",
+          Audiobook_Status: "Not Started"
+        }
+      })
+
+      await fetchProject()
+
+      // Use the author_name and book_title from the project
+      const authorName = project.author_name || "Mike Langlois";
+      const bookTitle = project.book_title || "Walker";
+      
+      // Use the voice name from the project
+      const voiceName = project.voice_name || "Abe";
+      
+      // Set the dictionary parameter to use the master dictionary
+      let dictionaryParam = ""
+      
+      // If there are pronunciation corrections, create/update the master dictionary first
+      if (pronunciationCorrections.length > 0) {
+        try {
+          // First, create/update the master pronunciation dictionary in ElevenLabs
+          const mappedCorrections = mapPronunciationCorrections(pronunciationCorrections)
+          const result = await createMasterPronunciationDictionary(
+            session.user.id,
+            project.id,
+            project.project_name,
+            project.book_title,
+            mappedCorrections
+          )
+          
+          if (result.created) {
+            console.log('Master pronunciation dictionary created/updated successfully')
+            
+            // Update the project with the dictionary name (for reference)
+            const { error: updateError } = await supabase
+              .from('projects')
+              .update({
+                pls_dict_name: masterDictionaryName,
+                pls_dict_file: `${masterDictionaryName}.pls`
+              })
+              .eq('id', project.id)
+            
+            if (updateError) {
+              console.error('Error updating project with dictionary info:', updateError)
+            }
+            
+            // Then, add the corrections to the Supabase master dictionary table
+            const addResult = await addToMasterDictionary({
+              userId: session.user.id,
+              projectId: project.id,
+              projectName: project.project_name,
+              bookName: project.book_title,
+              pronunciationCorrections: mappedCorrections
+            })
+            
+            if (!addResult.success) {
+              console.error('Error adding to master dictionary table:', addResult.error)
+              toast.error('Failed to add pronunciation corrections to master dictionary')
+            }
+            
+            // Set the dictionary parameter for the command
+            dictionaryParam = ` -pd "${masterDictionaryName}"`
+          } else {
+            console.error('Error creating master pronunciation dictionary:', result.reason)
+            toast.error('Failed to create master pronunciation dictionary')
+          }
+        } catch (error) {
+          console.error('Error creating pronunciation dictionary:', error)
+          toast.error('Failed to create pronunciation dictionary')
+        }
+      } else if (project.pls_dict_name) {
+        // If no new corrections but project has a dictionary name, use the master dictionary
+        dictionaryParam = ` -pd "${masterDictionaryName}"`
+      }
+      
+      // Set mode-specific parameters
+      const modeParam = mode === "validation" ? "validation" : "production"
+      
+      // In validation mode, use -l 2, in production mode, omit -l parameter entirely
+      const limitParam = mode === "validation" ? " -l 2" : "-l 5"
+      
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam}${limitParam} -ss -m ${modeParam}`
+      await sendCommand(command)
+      
+      toast.success('Storyboard generation started. This may take a few minutes.')
+    } catch (error) {
+      console.error('Error generating storyboard:', error)
+      toast.error('Failed to generate storyboard')
+    }
+  }
+
+  // Update handleGenerateAudiobook to use the mode
+  const handleGenerateAudiobook = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('No session')
+      if (!project) throw new Error('Project not found')
+
+      // Extract filename from epub_file_path
+      const epubFilename = project.epub_file_path.split('/').pop()
+      if (!epubFilename) throw new Error('EPUB filename not found')
+
+      await updateProjectStatus({
+        userId: session.user.id,
+        projectId: project.id,
+        status: {
+          Project: project.project_name,
+          Book: project.book_title,
+          notify: session.user.email || '',
+          userid: session.user.id,
+          projectid: project.id,
+          Current_Status: "Audiobook is Processing",
+          Ebook_Prep_Status: "Ebook Processing Complete",
+          Storyboard_Status: "Storyboard Complete",
+          Proof_Status: "Audiobook Processing, Please Wait",
+          Audiobook_Status: "Not Started"
+        }
+      })
+
+      await fetchProject()
+
+      // Use the author_name and book_title from the project
+      const authorName = project.author_name || "Mike Langlois"; // Default if not set
+      const bookTitle = project.book_title || "Walker"; // Use project book_title or default
+      
+      // Use the voice name from the project instead of hardcoded "Abe"
+      const voiceName = project.voice_name || "Abe";
+
+      // Use the master pronunciation dictionary
+      let dictionaryParam = ""
+      if (project.pls_dict_name) {
+        dictionaryParam = ` -pd "${masterDictionaryName}"`
+      }
+
+      // Log the dictionary parameter for debugging
+      console.log(`Sending audiobook command with dictionary parameter: ${dictionaryParam || 'none'}`)
+
+      // Set mode-specific parameters
+      const modeParam = mode === "validation" ? "validation" : "production"
+      
+      // In validation mode, use -l 2, in production mode, omit -l parameter entirely
+      const limitParam = mode === "validation" ? " -l 2" : "-l 5"
+      
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam}${limitParam} -sb -m ${modeParam}`
+      await sendCommand(command)
+      toast.success('Generation started')
+    } catch (error) {
+      console.error('Error generating audiobook:', error)
+      toast.error('Failed to start generation')
+    }
+  }
 
   const fetchProject = useCallback(async () => {
     try {
@@ -1195,325 +1547,6 @@ export default function ProjectDetail() {
       setIsEditing(false);
     }
   };
-
-  // Log mode changes
-  useEffect(() => {
-    console.log(`Mode changed to: ${mode}`)
-  }, [mode])
-
-  // Update handleProcessEpub to use the mode
-  const handleProcessEpub = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) throw new Error('No session')
-      if (!project) throw new Error('Project not found')
-
-      // Extract filename from epub_file_path
-      const epubFilename = project.epub_file_path.split('/').pop()
-      if (!epubFilename) throw new Error('EPUB filename not found')
-
-      await updateProjectStatus({
-        userId: session.user.id,
-        projectId: project.id,
-        status: {
-          Project: project.project_name,
-          Book: project.book_title,
-          notify: session.user.email || '',
-          userid: session.user.id,
-          projectid: project.id,
-          Current_Status: "Ebook is Processing",
-          Ebook_Prep_Status: "Processing Ebook File, Please Wait",
-          Storyboard_Status: "Waiting for Ebook Processing Completion",
-          Proof_Status: "Waiting for Storyboard Completion",
-          Audiobook_Status: "Not Started"
-        }
-      })
-
-      // Force immediate status refresh
-      await fetchProject()
-
-      // Use the author_name and book_title from the project
-      const authorName = project.author_name || "Mike Langlois"; // Default if not set
-      const bookTitle = project.book_title || "Walker"; // Use project book_title or default
-
-      // Get the selected voice name instead of ID
-      const selectedVoiceData = voices.find(voice => voice.voice_id === selectedVoice);
-      const voiceName = selectedVoiceData?.name || "Abe"; // Default to "Abe" if no voice selected or found
-
-      // Use the selected mode in the command
-      const modeParam = mode === "validation" ? "validation" : "production"
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}" -l 5 -si -m ${modeParam}`
-      await sendCommand(command)
-      toast.success('Processing started')
-    } catch (error) {
-      console.error('Error processing epub:', error)
-      toast.error('Failed to start processing')
-    }
-  }
-
-  // Add function to play voice preview
-  const playVoicePreview = () => {
-    if (!audioRef.current) return
-    
-    const selectedVoiceData = voices.find(voice => voice.voice_id === selectedVoice)
-    if (!selectedVoiceData?.preview_url) return
-    
-    audioRef.current.src = selectedVoiceData.preview_url
-    audioRef.current.play()
-    setIsPlayingPreview(true)
-    
-    audioRef.current.onended = () => {
-      setIsPlayingPreview(false)
-    }
-  }
-
-  // Add function to play name audio using ElevenLabs API
-  const playNameAudio = async (name: string) => {
-    if (!nameAudioRef.current || isPlayingNameAudio) return
-    
-    try {
-      setIsPlayingNameAudio(true)
-      
-      // Always use the currently selected voice from the dropdown
-      const voiceId = selectedVoice
-      
-      if (!voiceId) {
-        toast.error('Please select a voice first')
-        setIsPlayingNameAudio(false)
-        return
-      }
-      
-      // Call the ElevenLabs API
-      const response = await fetch('/api/elevenlabs', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          text: name,
-          voiceId: voiceId,
-        }),
-      })
-      
-      if (!response.ok) {
-        throw new Error('Failed to generate speech')
-      }
-      
-      const data = await response.json()
-      
-      // Play the audio
-      nameAudioRef.current.src = `data:audio/mpeg;base64,${data.audio}`
-      nameAudioRef.current.play()
-      
-      nameAudioRef.current.onended = () => {
-        setIsPlayingNameAudio(false)
-      }
-    } catch (error) {
-      console.error('Error playing name audio:', error)
-      toast.error('Failed to play name audio')
-      setIsPlayingNameAudio(false)
-    }
-  }
-
-  const handleGenerateStoryboard = async () => {
-    // Check if voice is selected
-    if (!project?.voice_id) {
-      toast.error('Please select a voice first')
-      return
-    }
-    
-    // Set flag to update dictionary when generating storyboard
-    // This ensures dictionary updates happen only when explicitly requested
-    setShouldUpdateDictionary(true)
-    
-    // Show the confirmation dialog
-    setIsStoryboardConfirmOpen(true)
-  }
-  
-  // Create a helper function for mapping pronunciation corrections to the format needed by the API
-  const mapPronunciationCorrections = (corrections: PronunciationCorrection[]): Array<{
-    originalName: string;
-    ipaPronunciation: string;
-  }> => {
-    return corrections.map(correction => ({
-      originalName: correction.originalName,
-      ipaPronunciation: correction.ipaPronunciation
-    }))
-  }
-  
-  // Update processStoryboardGeneration to use the mode
-  const processStoryboardGeneration = async () => {
-    try {
-      // Close the confirmation dialog immediately
-      setIsStoryboardConfirmOpen(false)
-      
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) throw new Error('No session')
-      if (!project) throw new Error('Project not found')
-      if (!project.voice_id) throw new Error('Voice not selected')
-      
-      // Set flag to update dictionary when generating storyboard
-      setShouldUpdateDictionary(true)
-      
-      // Extract filename from epub_file_path
-      const epubFilename = project.epub_file_path.split('/').pop()
-      if (!epubFilename) throw new Error('EPUB filename not found')
-
-      await updateProjectStatus({
-        userId: session.user.id,
-        projectId: project.id,
-        status: {
-          Project: project.project_name,
-          Book: project.book_title,
-          notify: session.user.email || '',
-          userid: session.user.id,
-          projectid: project.id,
-          Current_Status: "Storyboard is Processing",
-          Ebook_Prep_Status: "Ebook Processing Complete",
-          Storyboard_Status: "Processing Storyboard, Please Wait",
-          Proof_Status: "Waiting for Storyboard Completion",
-          Audiobook_Status: "Not Started"
-        }
-      })
-
-      await fetchProject()
-
-      // Use the author_name and book_title from the project
-      const authorName = project.author_name || "Mike Langlois";
-      const bookTitle = project.book_title || "Walker";
-      
-      // Use the voice name from the project
-      const voiceName = project.voice_name || "Abe";
-      
-      // Set the dictionary parameter to use the master dictionary
-      let dictionaryParam = ""
-      
-      // If there are pronunciation corrections, create/update the master dictionary first
-      if (pronunciationCorrections.length > 0) {
-        try {
-          // First, create/update the master pronunciation dictionary in ElevenLabs
-          const mappedCorrections = mapPronunciationCorrections(pronunciationCorrections)
-          const result = await createMasterPronunciationDictionary(
-            session.user.id,
-            project.id,
-            project.project_name,
-            project.book_title,
-            mappedCorrections
-          )
-          
-          if (result.created) {
-            console.log('Master pronunciation dictionary created/updated successfully')
-            
-            // Update the project with the dictionary name (for reference)
-            const { error: updateError } = await supabase
-              .from('projects')
-              .update({
-                pls_dict_name: masterDictionaryName,
-                pls_dict_file: `${masterDictionaryName}.pls`
-              })
-              .eq('id', project.id)
-            
-            if (updateError) {
-              console.error('Error updating project with dictionary info:', updateError)
-            }
-            
-            // Then, add the corrections to the Supabase master dictionary table
-            const addResult = await addToMasterDictionary({
-              userId: session.user.id,
-              projectId: project.id,
-              projectName: project.project_name,
-              bookName: project.book_title,
-              pronunciationCorrections: mappedCorrections
-            })
-            
-            if (!addResult.success) {
-              console.error('Error adding to master dictionary table:', addResult.error)
-              toast.error('Failed to add pronunciation corrections to master dictionary')
-            }
-            
-            // Set the dictionary parameter for the command
-            dictionaryParam = ` -pd "${masterDictionaryName}"`
-          } else {
-            console.error('Error creating master pronunciation dictionary:', result.reason)
-            toast.error('Failed to create master pronunciation dictionary')
-          }
-        } catch (error) {
-          console.error('Error creating pronunciation dictionary:', error)
-          toast.error('Failed to create pronunciation dictionary')
-        }
-      } else if (project.pls_dict_name) {
-        // If no new corrections but project has a dictionary name, use the master dictionary
-        dictionaryParam = ` -pd "${masterDictionaryName}"`
-      }
-      
-      // Use the selected mode in the command
-      const modeParam = mode === "validation" ? "validation" : "production"
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -ss -m ${modeParam}`
-      await sendCommand(command)
-      
-      toast.success('Storyboard generation started. This may take a few minutes.')
-    } catch (error) {
-      console.error('Error generating storyboard:', error)
-      toast.error('Failed to generate storyboard')
-    }
-  }
-
-  // Update handleGenerateAudiobook to use the mode
-  const handleGenerateAudiobook = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) throw new Error('No session')
-      if (!project) throw new Error('Project not found')
-
-      // Extract filename from epub_file_path
-      const epubFilename = project.epub_file_path.split('/').pop()
-      if (!epubFilename) throw new Error('EPUB filename not found')
-
-      await updateProjectStatus({
-        userId: session.user.id,
-        projectId: project.id,
-        status: {
-          Project: project.project_name,
-          Book: project.book_title,
-          notify: session.user.email || '',
-          userid: session.user.id,
-          projectid: project.id,
-          Current_Status: "Audiobook is Processing",
-          Ebook_Prep_Status: "Ebook Processing Complete",
-          Storyboard_Status: "Storyboard Complete",
-          Proof_Status: "Audiobook Processing, Please Wait",
-          Audiobook_Status: "Not Started"
-        }
-      })
-
-      await fetchProject()
-
-      // Use the author_name and book_title from the project
-      const authorName = project.author_name || "Mike Langlois"; // Default if not set
-      const bookTitle = project.book_title || "Walker"; // Use project book_title or default
-      
-      // Use the voice name from the project instead of hardcoded "Abe"
-      const voiceName = project.voice_name || "Abe";
-
-      // Use the master pronunciation dictionary
-      let dictionaryParam = ""
-      if (project.pls_dict_name) {
-        dictionaryParam = ` -pd "${masterDictionaryName}"`
-      }
-
-      // Log the dictionary parameter for debugging
-      console.log(`Sending audiobook command with dictionary parameter: ${dictionaryParam || 'none'}`)
-
-      // Use the selected mode in the command
-      const modeParam = mode === "validation" ? "validation" : "production"
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -sb -m ${modeParam}`
-      await sendCommand(command)
-      toast.success('Generation started')
-    } catch (error) {
-      console.error('Error generating audiobook:', error)
-      toast.error('Failed to start generation')
-    }
-  }
 
   const handleNewImageSet = async (item: StoryboardItem) => {
     if (!item.image?.path || processingNewImageSet.has(item.number)) return
@@ -2360,9 +2393,13 @@ export default function ProjectDetail() {
       // Log the dictionary parameter for debugging
       console.log(`Sending final audiobook command with dictionary parameter: ${dictionaryParam || 'none'}`)
 
-      // Use the selected mode in the command
+      // Set mode-specific parameters
       const modeParam = mode === "validation" ? "validation" : "production"
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -l 2 -sp -m ${modeParam}`
+      
+      // In validation mode, use -l 2, in production mode, omit -l parameter entirely
+      const limitParam = mode === "validation" ? " -l 2" : "-l 5"
+      
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam}${limitParam} -sp -m ${modeParam}`
       await sendCommand(command)
       toast.success('Final audiobook generation started')
     } catch (error) {
