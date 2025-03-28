@@ -229,12 +229,10 @@ async function processFileBatch(
 export async function getSignedImageUrls(
   userId: string, 
   projectId: string, 
-  batchSize: number = 50,
-  maxConcurrentBatches: number = 5
+  batchSize: number = 100,
+  maxConcurrentBatches: number = 6
 ): Promise<SignedFileResponse[]> {
   try {
-    console.log('Refreshing project files...')
-
     // Get all files from different directories in parallel
     const [baseResponse, tempResponse, outputResponse] = await Promise.all([
       r2Client.send(new ListObjectsV2Command({
@@ -1072,8 +1070,6 @@ export async function copyHlsStreamingFiles({
     const validationPrefix = `${userId}/${projectId}/streaming/`;
     const productionPrefix = `streaming_assets/${userId}/${projectId}/`;
     
-    console.log(`Starting copy from ${validationPrefix} to ${productionPrefix}`);
-    
     // List all files in the validation streaming directory
     const listCommand = new ListObjectsV2Command({
       Bucket: process.env.R2_BUCKET_NAME,
@@ -1084,11 +1080,8 @@ export async function copyHlsStreamingFiles({
     const { Contents } = await r2Client.send(listCommand);
     
     if (!Contents || Contents.length === 0) {
-      console.log('No HLS streaming files found in validation path:', validationPrefix);
       return { success: false, error: 'No streaming files found' };
     }
-    
-    console.log(`Found ${Contents.length} streaming files to copy`);
     
     // Copy each file to the production path
     for (const file of Contents) {
@@ -1096,8 +1089,6 @@ export async function copyHlsStreamingFiles({
       
       // Calculate the destination key by replacing the prefix
       const destinationKey = file.Key.replace(validationPrefix, productionPrefix);
-      
-      console.log(`Copying ${file.Key} to ${destinationKey}`);
       
       // Copy the file
       await r2Client.send(new CopyObjectCommand({
@@ -1107,7 +1098,6 @@ export async function copyHlsStreamingFiles({
       }));
     }
     
-    console.log(`Successfully copied ${Contents.length} HLS streaming files`);
     return { success: true };
   } catch (error) {
     console.error('Error copying HLS streaming files:', error);

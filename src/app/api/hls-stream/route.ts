@@ -29,8 +29,6 @@ export async function GET(request: NextRequest) {
       return new NextResponse('Path parameter is required', { status: 400 })
     }
 
-    console.log('Proxying HLS stream file:', path)
-
     // Get the file from R2
     const getCommand = new GetObjectCommand({
       Bucket: process.env.R2_BUCKET_NAME,
@@ -67,7 +65,6 @@ export async function GET(request: NextRequest) {
       
       // Extract the base path (everything up to the last /)
       const basePath = path.substring(0, path.lastIndexOf('/') + 1)
-      console.log('Base path for segments:', basePath)
       
       // Process each line to rewrite segment URLs
       const lines = content.split('\n')
@@ -95,19 +92,16 @@ export async function GET(request: NextRequest) {
               // Extract just the path part
               segmentPath = urlObj.pathname.startsWith('/') ? 
                 urlObj.pathname.substring(1) : urlObj.pathname
-              console.log(`Extracted absolute path: ${segmentPath}`)
             } catch (e) {
               console.error(`Error processing URL ${segmentPath}:`, e)
             }
           } else if (!segmentPath.includes('/')) {
             // Handle relative URLs by combining with the base path
             segmentPath = basePath + segmentPath
-            console.log(`Combined with base path: ${segmentPath}`)
           }
           
           // Create the proxy URL
           const proxiedUrl = `/api/hls-stream?path=${encodeURIComponent(segmentPath)}`
-          console.log(`Rewriting segment: ${line.trim()} -> ${proxiedUrl}`)
           return proxiedUrl
         }
         
@@ -134,7 +128,6 @@ export async function GET(request: NextRequest) {
     // Set appropriate content type based on file extension
     if (fileExtension === 'm3u8') {
       headers.set('Cache-Control', 'no-cache') // Ensure manifest is always fresh
-      console.log('Sending m3u8 response with content type:', contentType, 'and size:', buffer.length)
     } else if (fileExtension === 'ts') {
       headers.set('Cache-Control', 'public, max-age=604800') // Cache TS segments for 1 week
     } else if (fileExtension === 'mp4') {
