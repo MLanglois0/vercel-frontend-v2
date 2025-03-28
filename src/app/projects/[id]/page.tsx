@@ -25,8 +25,7 @@ import {
   getVoiceDataFile,
   getNerDataFile,
   saveJsonToR2,
-  getJsonFromR2,
-  copyHlsStreamingFiles
+  getJsonFromR2
 } from '@/app/actions/storage'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { AudioPlayer } from '@/components/AudioPlayer'
@@ -434,25 +433,6 @@ export default function ProjectDetail() {
         console.error('Error updating project mode:', updateError);
       }
       
-      // Copy files from validation hls location to production hls location
-      // In validation mode: <userid>/<projectid>/streaming
-      // In production mode: streaming_assets/<userid>/<projectid>
-      const validationHlsPath = `${session.user.id}/${project.id}/streaming`;
-      const productionHlsPath = `streaming_assets/${session.user.id}/${project.id}`;
-
-      console.log(`Copying HLS files from ${validationHlsPath} to ${productionHlsPath}`);
-      
-      // Copy the HLS streaming files from validation to production path
-      const copyResult = await copyHlsStreamingFiles({
-        userId: session.user.id,
-        projectId: project.id
-      });
-      
-      if (!copyResult.success) {
-        console.log(`No HLS files to copy or copy failed: ${copyResult.error}`);
-        // Continue with the process even if copying fails
-      }
-
       // Update project status for storyboard processing
       await updateProjectStatus({
         userId: session.user.id,
@@ -464,7 +444,7 @@ export default function ProjectDetail() {
           userid: session.user.id,
           projectid: project.id,
           Current_Status: "Storyboard is Processing",
-          Ebook_Prep_Status: "Ebook Processing Complete", // Assuming intake is already done
+          Ebook_Prep_Status: "Ebook Processing Complete",
           Storyboard_Status: "Processing Storyboard, Please Wait",
           Proof_Status: "Waiting for Storyboard Completion",
           Audiobook_Status: "Not Started"
@@ -491,8 +471,8 @@ export default function ProjectDetail() {
         dictionaryParam = ` -pd "${masterDictionaryName}"`;
       }
 
-      // Run storyboard generation in production mode
-      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -ss -m production`;
+      // Run storyboard generation in production mode with -l 5
+      const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam} -ss -m production -l 5`;
       await sendCommand(command);
       
       toast.success('Production mode activated. Storyboard generation started.');
@@ -905,9 +885,6 @@ export default function ProjectDetail() {
       if (project.pls_dict_name) {
         dictionaryParam = ` -pd "${masterDictionaryName}"`
       }
-
-      // Log the dictionary parameter for debugging
-      console.log(`Sending audiobook command with dictionary parameter: ${dictionaryParam || 'none'}`)
 
       // Set mode-specific parameters
       const modeParam = mode === "validation" ? "validation" : "production"
@@ -3844,10 +3821,13 @@ export default function ProjectDetail() {
                 {projectStatus?.Audiobook_Status === "Audiobook Complete" && (
                   <Button
                     variant="outline"
-                    disabled
-                    className="bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200"
+                    onClick={handleProductionModeToggle}
+                    disabled={mode === "production" || isActivatingProduction || !canEnableProductionMode()}
+                    className={mode === "production" ? 
+                      "bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200" : 
+                      "bg-blue-600 text-white hover:bg-blue-700"}
                   >
-                    {hlsPath ? "Stream Available" : "Stream Processing"}
+                    {mode === "production" ? "Production Mode Active" : "Enter Production Mode"}
                   </Button>
                 )}
               </div>
@@ -4336,15 +4316,18 @@ export default function ProjectDetail() {
       <Dialog open={isProductionConfirmOpen} onOpenChange={setIsProductionConfirmOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Activate Production Mode</DialogTitle>
+            <DialogTitle>Enter Production Mode</DialogTitle>
             <DialogDescription>
-              Once production mode is enabled, you cannot return to validation mode. Production mode will create a storyboard for your entire book, and return you to that point in the process. You will be able to work with the storyboard as normal.
+              If you are happy with the validation run, you may click proceed to engage the production mode. 
+              This mode will allow you to process your entire book. We will save your current storyboard progress 
+              and then generate the remaining storyboard items for the rest of your book. You will be able to 
+              proceed as normal from there.
             </DialogDescription>
           </DialogHeader>
           <div className="py-4">
             <div className="p-3 bg-yellow-50 rounded-md text-yellow-800 text-sm">
               <p className="font-medium">Important:</p>
-              <p>This action will restart the process from the beginning but will process your entire book instead of a sample.</p>
+              <p>This action will preserve your current progress and then generate the remaining storyboard items for your entire book.</p>
             </div>
           </div>
           <DialogFooter className="flex justify-between sm:justify-end gap-2">
