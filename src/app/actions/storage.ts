@@ -59,177 +59,266 @@ interface NerData {
   }>;
 }
 
-export async function listProjectFiles(userId: string, projectId: string) {
+// Helper function to chunk array into batches
+function chunkArray<T>(array: T[], size: number): T[][] {
+  const chunks: T[][] = []
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size))
+  }
+  return chunks
+}
+
+interface S3File {
+  Key: string;
+}
+
+// Add retry helper function at the top with other helpers
+async function retryOperation<T>(
+  operation: () => Promise<T>,
+  maxRetries: number = 3,
+  initialDelay: number = 1000
+): Promise<T> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error as Error;
+      if (attempt < maxRetries - 1) {
+        // Exponential backoff with jitter
+        const delay = initialDelay * Math.pow(2, attempt) * (0.5 + Math.random() * 0.5);
+        console.log(`Retry attempt ${attempt + 1} after ${Math.round(delay)}ms`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  
+  throw lastError;
+}
+
+// Update processFileBatch to use retry logic
+async function processFileBatch(
+  files: S3File[], 
+  userId: string, 
+  projectId: string
+): Promise<SignedFileResponse[]> {
   try {
-    // console.log(`Listing files for user ${userId} and project ${projectId}`)
-    const listCommand = new ListObjectsV2Command({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Prefix: `${userId}/${projectId}/`
-    })
+    const responses = await Promise.all(
+      files.map(async (file): Promise<SignedFileResponse | null> => {
+        try {
+          // Validate that the file belongs to the correct user and project
+          if (!file.Key.startsWith(`${userId}/${projectId}/`)) {
+            throw new Error(`Invalid file path: ${file.Key}`)
+          }
 
-    const { Contents: files } = await r2Client.send(listCommand)
-    // console.log('Raw files from R2:', files?.map(f => f.Key))
-    if (!files) return []
+          const fileName = file.Key.split('/').pop() || ''
+          const isInTemp = file.Key.includes('/temp/')
 
-    const signedFiles = await Promise.all(
-      files.map(async (file): Promise<{ path: string } | null> => {
-        if (!file.Key) return null
-        // console.log('Processing file for deletion:', file.Key)
-        return {
-          path: file.Key
+          let number = 0
+          let type: FileType
+          let content: string | undefined
+
+          if (/\.(jpg|jpeg|png|webp)$/i.test(fileName) || fileName.endsWith('jpgoldset')) {
+            type = 'image'
+            if (isInTemp) {
+              if (fileName.endsWith('jpgoldset')) {
+                const oldsetMatch = fileName.match(/image(\d+)\.jpgoldset$/)
+                if (oldsetMatch) number = parseInt(oldsetMatch[1])
+              } else if (fileName.match(/image(\d+)_sbsave(?:_\d+)?\.jpg$/)) {
+                const saveMatch = fileName.match(/image(\d+)_sbsave(?:_\d+)?\.jpg$/)
+                if (saveMatch) number = parseInt(saveMatch[1])
+              } else {
+                const mainMatch = fileName.match(/image(\d+)(?:_\d+)?\.jpg$/)
+                if (mainMatch) number = parseInt(mainMatch[1])
+              }
+            }
+          } else if (/\.mp3$/.test(fileName)) {
+            type = 'audio'
+            const mainMatch = fileName.match(/audio(\d+)(?:_\d+)?\.mp3$/)
+            const sbsaveMatch = fileName.match(/audio(\d+)_sbsave(?:_\d+)?\.mp3$/)
+            
+            if (mainMatch?.[1]) {
+              number = parseInt(mainMatch[1])
+            } else if (sbsaveMatch?.[1]) {
+              number = parseInt(sbsaveMatch[1])
+            }
+          } else if (/\.mp4$/.test(fileName)) {
+            type = 'video'
+            const match = fileName.match(/(\d+)\.mp4$/)
+            if (match) number = parseInt(match[1])
+          } else if (/\.txt$/.test(fileName)) {
+            type = 'text'
+            const match = fileName.match(/chunk(\d+)\.txt$/)
+            if (match) number = parseInt(match[1])
+            
+            // Add retry for text content
+            content = await retryOperation(async () => {
+              const getCommand = new GetObjectCommand({
+                Bucket: process.env.R2_BUCKET_NAME,
+                Key: file.Key,
+              })
+              const response = await r2Client.send(getCommand)
+              return await response.Body?.transformToString()
+            }).catch(error => {
+              console.error(`Error reading text content for ${file.Key} after retries:`, error)
+              return undefined
+            })
+          } else if (/\.json$/.test(fileName)) {
+            type = 'json'
+            
+            // Add retry for JSON content
+            content = await retryOperation(async () => {
+              const getCommand = new GetObjectCommand({
+                Bucket: process.env.R2_BUCKET_NAME,
+                Key: file.Key,
+              })
+              const response = await r2Client.send(getCommand)
+              return await response.Body?.transformToString()
+            }).catch(error => {
+              console.error(`Error reading JSON content for ${file.Key} after retries:`, error)
+              return undefined
+            })
+          } else if (/\.epub$/.test(fileName)) {
+            type = 'epub'
+          } else return null
+
+          // Add retry for signed URL generation with stricter error handling
+          const url = await retryOperation(async () => {
+            const signedUrl = await getSignedUrl(r2Client, new GetObjectCommand({
+              Bucket: process.env.R2_BUCKET_NAME,
+              Key: file.Key,
+            }), { expiresIn: 3600 })
+            
+            if (!signedUrl) {
+              throw new Error(`Failed to generate signed URL for ${file.Key}`)
+            }
+            
+            return signedUrl
+          })
+
+          return {
+            url,
+            number,
+            path: file.Key,
+            type,
+            content,
+          }
+        } catch (fileError) {
+          // Log the error but continue processing other files
+          console.error(`Error processing file ${file.Key} after all retries:`, fileError)
+          return null
         }
       })
     )
 
-    const filtered = signedFiles.filter((file): file is NonNullable<typeof file> => file !== null)
-    // console.log('Final list of files to process:', filtered.map(f => f.path))
-    return filtered
+    const validResponses = responses.filter((response): response is SignedFileResponse => response !== null)
+    
+    // Throw error if batch completely failed
+    if (responses.length > 0 && validResponses.length === 0) {
+      throw new Error('Failed to process any files in batch')
+    }
+
+    return validResponses
   } catch (error) {
-    console.error('Error listing project files:', error)
-    throw error
+    console.error('Error processing file batch:', error)
+    throw error // Propagate the error up instead of returning empty array
   }
 }
 
-export async function getSignedImageUrls(userId: string, projectId: string): Promise<SignedFileResponse[]> {
+export async function getSignedImageUrls(
+  userId: string, 
+  projectId: string, 
+  batchSize: number = 50,
+  maxConcurrentBatches: number = 5
+): Promise<SignedFileResponse[]> {
   try {
-    // Get all files from base path (for cover and epub)
-    const baseCommand = new ListObjectsV2Command({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Prefix: `${userId}/${projectId}/`,
-      Delimiter: '/' // Only get files in base directory
-    })
+    console.log('Refreshing project files...')
 
-    // Get storyboard files from temp directory
-    const tempCommand = new ListObjectsV2Command({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Prefix: `${userId}/${projectId}/temp/`,
-      Delimiter: '/' // Only get files directly in temp
-    })
-
-    // Get video files from output directory
-    const outputCommand = new ListObjectsV2Command({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Prefix: `${userId}/${projectId}/output/`,
-      Delimiter: '/' // Only get files directly in output
-    })
-
+    // Get all files from different directories in parallel
     const [baseResponse, tempResponse, outputResponse] = await Promise.all([
-      r2Client.send(baseCommand),
-      r2Client.send(tempCommand),
-      r2Client.send(outputCommand)
-    ])
+      r2Client.send(new ListObjectsV2Command({
+        Bucket: process.env.R2_BUCKET_NAME,
+        Prefix: `${userId}/${projectId}/`,
+        Delimiter: '/'
+      })),
+      r2Client.send(new ListObjectsV2Command({
+        Bucket: process.env.R2_BUCKET_NAME,
+        Prefix: `${userId}/${projectId}/temp/`,
+        Delimiter: '/'
+      })),
+      r2Client.send(new ListObjectsV2Command({
+        Bucket: process.env.R2_BUCKET_NAME,
+        Prefix: `${userId}/${projectId}/output/`,
+        Delimiter: '/'
+      }))
+    ]).catch(error => {
+      console.error('Failed to list project directories:', error)
+      throw new Error('Failed to retrieve project file list. Please try again.')
+    })
 
+    // Filter out files without Keys and cast to S3File type
     const allFiles = [
       ...(baseResponse.Contents || []),
       ...(tempResponse.Contents || []),
       ...(outputResponse.Contents || [])
-    ]
+    ].filter((file): file is S3File => file.Key !== undefined)
 
-    if (!allFiles.length) return []
+    // Throw error if we can't get any files when we expect them
+    if (!allFiles.length) {
+      throw new Error('No files found in project. If this is unexpected, please try refreshing the page.')
+    }
 
-    console.log('Refreshing project files...')
+    // Split files into batches
+    const batches = chunkArray(allFiles, batchSize)
+    const results: SignedFileResponse[] = []
+    let errorCount = 0
+    const totalExpectedFiles = allFiles.length
+    let totalProcessedFiles = 0
 
-    const signedUrls = await Promise.all(
-      allFiles.map(async (file): Promise<SignedFileResponse | null> => {
-        // Process each file
-        if (!file.Key) return null
+    // Process batches with controlled concurrency
+    for (let i = 0; i < batches.length; i += maxConcurrentBatches) {
+      try {
+        const currentBatches = batches.slice(i, i + maxConcurrentBatches)
+        const batchResults = await Promise.all(
+          currentBatches.map(batch => processFileBatch(batch, userId, projectId))
+        )
 
-        const fileName = file.Key.split('/').pop() || ''
-        
-        // Handle files based on their location
-        const isInTemp = file.Key.includes('/temp/')
+        // Flatten results and count processed files
+        const validResults = batchResults.flat()
+        results.push(...validResults)
+        totalProcessedFiles += validResults.length
 
-        // For storyboard files (in temp), extract number from filename
-        let number = 0
-        let type: FileType
-        let content: string | undefined
-
-        if (/\.(jpg|jpeg|png|webp)$/i.test(fileName) || fileName.endsWith('jpgoldset')) {
-          type = 'image'
-          if (isInTemp) {
-            // First check for oldset files
-            if (fileName.endsWith('jpgoldset')) {
-              const oldsetMatch = fileName.match(/image(\d+)\.jpgoldset$/)
-              if (oldsetMatch) {
-                number = parseInt(oldsetMatch[1])
-              }
-            }
-            // Then check for saved versions
-            else if (fileName.match(/image(\d+)_sbsave(?:_\d+)?\.jpg$/)) {
-              const saveMatch = fileName.match(/image(\d+)_sbsave(?:_\d+)?\.jpg$/)
-              if (saveMatch) {
-                number = parseInt(saveMatch[1])
-              }
-            }
-            // Finally check for regular images
-            else {
-              const mainMatch = fileName.match(/image(\d+)(?:_\d+)?\.jpg$/)
-              if (mainMatch) {
-                number = parseInt(mainMatch[1])
-              }
-            }
-          }
-        } else if (/\.mp3$/.test(fileName)) {
-          type = 'audio'
-          const mainMatch = fileName.match(/audio(\d+)(?:_\d+)?\.mp3$/)
-          const sbsaveMatch = fileName.match(/audio(\d+)_sbsave(?:_\d+)?\.mp3$/)
-          
-          if (mainMatch?.[1]) {
-            number = parseInt(mainMatch[1])
-          } else if (sbsaveMatch?.[1]) {
-            number = parseInt(sbsaveMatch[1])
-          }
-        } else if (/\.mp4$/.test(fileName)) {
-          type = 'video'
-          const match = fileName.match(/(\d+)\.mp4$/)
-          if (match) number = parseInt(match[1])
-        } else if (/\.txt$/.test(fileName)) {
-          type = 'text'
-          const match = fileName.match(/chunk(\d+)\.txt$/)
-          if (match) number = parseInt(match[1])
-          
-          const getCommand = new GetObjectCommand({
-            Bucket: process.env.R2_BUCKET_NAME,
-            Key: file.Key,
-          })
-          const response = await r2Client.send(getCommand)
-          content = await response.Body?.transformToString()
-        } else if (/\.json$/.test(fileName)) {
-          // Handle JSON files
-          type = 'json'
-          
-          const getCommand = new GetObjectCommand({
-            Bucket: process.env.R2_BUCKET_NAME,
-            Key: file.Key,
-          })
-          const response = await r2Client.send(getCommand)
-          content = await response.Body?.transformToString()
-        } else if (/\.epub$/.test(fileName)) {
-          type = 'epub'
-        } else return null
-
-        // console.log('Processing file:', { fileName, type, number, isInTemp })
-
-        return {
-          url: await getSignedUrl(r2Client, new GetObjectCommand({
-            Bucket: process.env.R2_BUCKET_NAME,
-            Key: file.Key,
-          }), { expiresIn: 3600 }),
-          number,
-          path: file.Key,
-          type,
-          content,
+        // Log progress
+        const progress = Math.min(100, Math.round(((i + maxConcurrentBatches) / batches.length) * 100))
+        console.log(`Processing files: ${progress}% complete (${totalProcessedFiles}/${totalExpectedFiles} files)`)
+      } catch (batchError) {
+        console.error('Error processing batch:', batchError)
+        errorCount++
+        // Only continue if we haven't hit too many errors
+        if (errorCount > Math.ceil(batches.length * 0.25)) { // If more than 25% of batches fail
+          throw new Error('Too many errors while processing files. Please try refreshing the page.')
         }
-      })
-    )
+        continue
+      }
+    }
 
-    const filtered = signedUrls.filter((url): url is SignedFileResponse => url !== null)
+    // Verify we got enough files
+    const successRate = totalProcessedFiles / totalExpectedFiles
+    if (successRate < 0.75) { // If we got less than 75% of expected files
+      throw new Error(`Failed to process most project files (${totalProcessedFiles}/${totalExpectedFiles} files processed). Please try refreshing the page.`)
+    }
+
+    if (errorCount > 0) {
+      console.warn(`Completed with ${errorCount} batch errors. ${totalProcessedFiles}/${totalExpectedFiles} files processed.`)
+    }
 
     console.log('Project files refreshed successfully')
-    return filtered
+    return results
   } catch (error) {
     console.error('Error generating signed URLs:', error)
-    throw error
+    // Throw a user-friendly error instead of returning empty array
+    throw new Error(getUserFriendlyError(error))
   }
 }
 
@@ -750,6 +839,9 @@ export async function getVoiceDataFile({
   }
 }
 
+// Add a cache for NER file paths
+const nerFilePathCache = new Map<string, string>();
+
 // Add a new function to get NER data file
 export async function getNerDataFile({
   userId,
@@ -759,34 +851,39 @@ export async function getNerDataFile({
   projectId: string
 }): Promise<NerData | null> {
   try {
-    // First, list all files in the temp directory to find the correct NER file name pattern
-    const listCommand = new ListObjectsV2Command({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Prefix: `${userId}/${projectId}/temp/`,
-      Delimiter: '/'
-    })
+    // Check cache first
+    const cacheKey = `${userId}/${projectId}`;
+    let nerDataFilePath = nerFilePathCache.get(cacheKey);
 
-    const { Contents: files } = await r2Client.send(listCommand)
-    
-    if (!files || files.length === 0) {
-      console.log(`No files found in temp directory for project ${projectId}`)
-      return null
+    if (!nerDataFilePath) {
+      // Only list files if we haven't found the path before
+      const listCommand = new ListObjectsV2Command({
+        Bucket: process.env.R2_BUCKET_NAME,
+        Prefix: `${userId}/${projectId}/temp/`,
+        Delimiter: '/'
+      })
+
+      const { Contents: files } = await r2Client.send(listCommand)
+      
+      if (!files || files.length === 0) {
+        return null
+      }
+
+      // Look for a file that ends with _ner.json (language-agnostic)
+      const nerFile = files.find(file => 
+        file.Key && file.Key.endsWith('_ner.json')
+      )
+
+      if (!nerFile || !nerFile.Key) {
+        return null
+      }
+
+      // Cache the found path
+      nerDataFilePath = nerFile.Key;
+      nerFilePathCache.set(cacheKey, nerDataFilePath);
     }
-
-    // Look for a file that ends with _ner.json (language-agnostic)
-    const nerFile = files.find(file => 
-      file.Key && file.Key.endsWith('_ner.json')
-    )
-
-    if (!nerFile || !nerFile.Key) {
-      console.log(`No NER file found in temp directory for project ${projectId}`)
-      return null
-    }
-
-    // Use the found NER file path
-    const nerDataFilePath = nerFile.Key
-    console.log(`Found NER file: ${nerDataFilePath}`)
     
+    // Get the NER data using the cached or found path
     const getCommand = new GetObjectCommand({
       Bucket: process.env.R2_BUCKET_NAME,
       Key: nerDataFilePath
@@ -800,9 +897,9 @@ export async function getNerDataFile({
         return JSON.parse(nerDataContent) as NerData
       }
     } catch (error) {
-      // If file doesn't exist, return null
+      // If file doesn't exist, clear cache and return null
       if (error instanceof Error && 'name' in error && error.name === 'NoSuchKey') {
-        console.log(`NER data file not found at ${nerDataFilePath}`)
+        nerFilePathCache.delete(cacheKey);
         return null
       }
       throw error
@@ -1018,6 +1115,31 @@ export async function copyHlsStreamingFiles({
       success: false, 
       error: getUserFriendlyError(error)
     };
+  }
+}
+
+// Add new function to get just the cover image URL
+export async function getSignedCoverUrl(
+  userId: string,
+  projectId: string,
+  coverPath: string
+): Promise<string> {
+  try {
+    // Validate that the cover path belongs to the correct user and project
+    if (!coverPath.startsWith(`${userId}/${projectId}/`)) {
+      throw new Error('Invalid cover path')
+    }
+
+    // Get signed URL for just the cover image
+    const url = await getSignedUrl(r2Client, new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: coverPath,
+    }), { expiresIn: 3600 })
+
+    return url
+  } catch (error) {
+    console.error('Error getting signed cover URL:', error)
+    throw error
   }
 }
 

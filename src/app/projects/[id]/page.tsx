@@ -1167,23 +1167,29 @@ export default function ProjectDetail() {
         const { data: { session } } = await supabase.auth.getSession()
         if (!session) return
 
-        const status = await getProjectStatus({
+        // Only fetch the lightweight project_status.json
+        const newStatus = await getProjectStatus({
           userId: session.user.id,
           projectId: project.id
         })
         
-        if (status && isPolling) {
-          const wasProcessing = projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait" ||
-                              projectStatus?.Proof_Status === "Audiobook Processing, Please Wait"
-          const isComplete = status.Storyboard_Status === "Storyboard Complete" ||
-                           status.Proof_Status === "Proofs Complete"
-          
-          setProjectStatus(status)
-          
-          // Only refresh if we were processing and now we're complete
-          if (wasProcessing && isComplete) {
+        if (newStatus && isPolling) {
+          // Check if status has changed
+          if (
+            newStatus.Current_Status !== projectStatus?.Current_Status ||
+            newStatus.Ebook_Prep_Status !== projectStatus?.Ebook_Prep_Status ||
+            newStatus.Storyboard_Status !== projectStatus?.Storyboard_Status ||
+            newStatus.Proof_Status !== projectStatus?.Proof_Status ||
+            newStatus.Audiobook_Status !== projectStatus?.Audiobook_Status
+          ) {
+            // Status has changed, update status and fetch new file list
+            console.log('Project status changed, refreshing files')
+            setProjectStatus(newStatus)
             setProcessingNewImageSet(new Set())
             await fetchProject()
+          } else {
+            // Status hasn't changed, just update the status
+            setProjectStatus(newStatus)
           }
         }
       } catch (error) {
@@ -1198,7 +1204,7 @@ export default function ProjectDetail() {
         clearInterval(pollingInterval)
       }
     }
-  }, [project, projectStatus?.Storyboard_Status, projectStatus?.Proof_Status, fetchProject])
+  }, [project, projectStatus, fetchProject])
 
   // Add a useEffect to monitor project status changes
   useEffect(() => {
@@ -1224,70 +1230,72 @@ export default function ProjectDetail() {
       })
       
       if (voiceData?.voices && Array.isArray(voiceData.voices) && voiceData.voices.length > 0) {
-        setVoices(voiceData.voices)
-        // Set default selected voice if available
-        if (project?.voice_id && voiceData.voices.some(v => v.voice_id === project.voice_id)) {
-          // If project has a saved voice_id and it exists in the available voices, use it
-          setSelectedVoice(project.voice_id)
-        } else {
-          // Otherwise use the first voice
-          setSelectedVoice(voiceData.voices[0].voice_id)
+        // Only update voices if they've changed
+        if (JSON.stringify(voices) !== JSON.stringify(voiceData.voices)) {
+          setVoices(voiceData.voices)
+          // Set default selected voice if available
+          if (project?.voice_id && voiceData.voices.some(v => v.voice_id === project.voice_id)) {
+            // If project has a saved voice_id and it exists in the available voices, use it
+            setSelectedVoice(project.voice_id)
+          } else {
+            // Otherwise use the first voice
+            setSelectedVoice(voiceData.voices[0].voice_id)
+          }
         }
         setVoiceDataError(null)
       } else {
-        console.log('No voice data found or invalid format')
         setVoices([])
         setSelectedVoice("")
         setVoiceDataError('No voices available. Please process the ebook first.')
       }
       
-      // Load NER data
-      try {
-        const nerData = await getNerDataFile({
-          userId,
-          projectId
-        })
-        
-        if (nerData) {
-          // Cast to the correct type and check if it has the expected structure
-          const typedNerData = nerData as unknown as NerDataFromApi;
-          if (typedNerData.book_summary) {
-            setNerData({
-              book_summary: typedNerData.book_summary,
-              chapters: typedNerData.chapters || []
-            });
-          } else if (typedNerData.entities) {
-            console.log('Legacy NER data format detected')
-          } else {
-            console.log('NER data has unexpected format')
+      // Load NER data only if we don't have it yet or if it's changed
+      if (!nerData) {
+        try {
+          const nerData = await getNerDataFile({
+            userId,
+            projectId
+          })
+          
+          if (nerData) {
+            // Cast to the correct type and check if it has the expected structure
+            const typedNerData = nerData as unknown as NerDataFromApi;
+            if (typedNerData.book_summary) {
+              setNerData({
+                book_summary: typedNerData.book_summary,
+                chapters: typedNerData.chapters || []
+              });
+            } else if (typedNerData.entities) {
+              console.log('Legacy NER data format detected')
+            }
           }
-        } else {
-          setNerData(null)
+        } catch (nerError) {
+          console.error('Error loading NER data:', nerError)
         }
-      } catch (nerError) {
-        console.error('Error loading NER data:', nerError)
       }
       
-      // Load pronunciation corrections
-      try {
-        const corrections = await getJsonFromR2<PronunciationCorrection[]>({
-          userId,
-          projectId,
-          filename: 'pronunciation-corrections.json'
-        })
-        
-        if (corrections) {
-          setPronunciationCorrections(corrections)
+      // Load pronunciation corrections if we don't have any
+      if (pronunciationCorrections.length === 0) {
+        try {
+          const corrections = await getJsonFromR2<PronunciationCorrection[]>({
+            userId,
+            projectId,
+            filename: 'pronunciation-corrections.json'
+          })
+          
+          if (corrections) {
+            setPronunciationCorrections(corrections)
+          }
+        } catch (correctionsError) {
+          console.error('Error loading pronunciation corrections:', correctionsError)
         }
-      } catch (correctionsError) {
-        console.error('Error loading pronunciation corrections:', correctionsError)
       }
       
     } catch (error) {
       console.error('Error loading voice and NER data:', error)
       setVoiceDataError('Failed to load voice data. Please try again later.')
     }
-  }, [project?.voice_id]);
+  }, [project?.voice_id, voices, nerData, pronunciationCorrections]);
 
   // Add a useEffect to reset the replace images flag when storyboard is complete
   useEffect(() => {
@@ -3007,7 +3015,9 @@ export default function ProjectDetail() {
                               {/* Person - Common */}
                               {nerData.book_summary?.person_entities_common?.length > 0 && (
                                 <optgroup label="Person - Common">
-                                  {nerData.book_summary.person_entities_common.map((entity: EntityItem) => (
+                                  {[...nerData.book_summary.person_entities_common]
+                                    .sort((a, b) => a.name.localeCompare(b.name))
+                                    .map((entity: EntityItem) => (
                                     <option key={`person-common-${entity.name}`} value={`person-common-${entity.name}`}>
                                       {entity.name}
                                     </option>
@@ -3018,7 +3028,9 @@ export default function ProjectDetail() {
                               {/* Person - Unusual */}
                               {nerData.book_summary?.person_entities_unusual?.length > 0 && (
                                 <optgroup label="Person - Unusual">
-                                  {nerData.book_summary.person_entities_unusual.map((entity: EntityItem) => (
+                                  {[...nerData.book_summary.person_entities_unusual]
+                                    .sort((a, b) => a.name.localeCompare(b.name))
+                                    .map((entity: EntityItem) => (
                                     <option key={`person-unusual-${entity.name}`} value={`person-unusual-${entity.name}`}>
                                       {entity.name}
                                     </option>
@@ -3029,7 +3041,9 @@ export default function ProjectDetail() {
                               {/* Location - Common */}
                               {nerData.book_summary?.location_entities_common?.length > 0 && (
                                 <optgroup label="Location - Common">
-                                  {nerData.book_summary.location_entities_common.map((entity: EntityItem) => (
+                                  {[...nerData.book_summary.location_entities_common]
+                                    .sort((a, b) => a.name.localeCompare(b.name))
+                                    .map((entity: EntityItem) => (
                                     <option key={`location-common-${entity.name}`} value={`location-common-${entity.name}`}>
                                       {entity.name}
                                     </option>
@@ -3040,7 +3054,9 @@ export default function ProjectDetail() {
                               {/* Location - Unusual */}
                               {nerData.book_summary?.location_entities_unusual?.length > 0 && (
                                 <optgroup label="Location - Unusual">
-                                  {nerData.book_summary.location_entities_unusual.map((entity: EntityItem) => (
+                                  {[...nerData.book_summary.location_entities_unusual]
+                                    .sort((a, b) => a.name.localeCompare(b.name))
+                                    .map((entity: EntityItem) => (
                                     <option key={`location-unusual-${entity.name}`} value={`location-unusual-${entity.name}`}>
                                       {entity.name}
                                     </option>
@@ -3051,7 +3067,9 @@ export default function ProjectDetail() {
                               {/* Organization - Common */}
                               {nerData.book_summary?.organization_entities_common?.length > 0 && (
                                 <optgroup label="Organization - Common">
-                                  {nerData.book_summary.organization_entities_common.map((entity: EntityItem) => (
+                                  {[...nerData.book_summary.organization_entities_common]
+                                    .sort((a, b) => a.name.localeCompare(b.name))
+                                    .map((entity: EntityItem) => (
                                     <option key={`org-common-${entity.name}`} value={`org-common-${entity.name}`}>
                                       {entity.name}
                                     </option>
@@ -3062,7 +3080,9 @@ export default function ProjectDetail() {
                               {/* Organization - Unusual */}
                               {nerData.book_summary?.organization_entities_unusual?.length > 0 && (
                                 <optgroup label="Organization - Unusual">
-                                  {nerData.book_summary.organization_entities_unusual.map((entity: EntityItem) => (
+                                  {[...nerData.book_summary.organization_entities_unusual]
+                                    .sort((a, b) => a.name.localeCompare(b.name))
+                                    .map((entity: EntityItem) => (
                                     <option key={`org-unusual-${entity.name}`} value={`org-unusual-${entity.name}`}>
                                       {entity.name}
                                     </option>

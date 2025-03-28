@@ -12,7 +12,7 @@ import { uploadFile } from '@/app/actions/upload'
 import { useRouter } from 'next/navigation';
 import { getUserFriendlyError } from '@/lib/error-handler'
 import Image from 'next/image';
-import { getSignedImageUrls, getProjectStatus } from '@/app/actions/storage'
+import { getSignedCoverUrl, getProjectStatus } from '@/app/actions/storage'
 
 interface Project {
   id: string;
@@ -94,22 +94,21 @@ export default function Projects() {
       }
       setProjectStatuses(statuses);
 
-      // Get signed URLs for all cover images
+      // Get signed URLs for cover images only
       for (const project of data || []) {
         if (project.cover_file_path) {
           try {
-            const signedFiles = await getSignedImageUrls(session.user.id, project.id)
-            const coverFile = signedFiles.find(file => 
-              file.type === 'image' && file.path === project.cover_file_path
-            )
-            if (coverFile) {
-              setCoverUrls(prev => ({
-                ...prev,
-                [project.id]: coverFile.url
-              }))
-            }
+            const coverUrl = await getSignedCoverUrl(
+              session.user.id,
+              project.id,
+              project.cover_file_path
+            );
+            setCoverUrls(prev => ({
+              ...prev,
+              [project.id]: coverUrl
+            }));
           } catch (error) {
-            console.error('Error getting signed URL:', error)
+            console.error('Error getting cover URL:', error);
           }
         }
       }
