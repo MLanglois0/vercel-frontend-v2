@@ -56,6 +56,7 @@ interface Project {
   pls_dict_name?: string
   pls_dict_file?: string
   is_production_mode?: boolean
+  current_mode?: "validation" | "production"
 }
 
 interface Voice {
@@ -119,7 +120,21 @@ interface ProjectStatus {
 interface EntityItem {
   name: string;
   IPA: string;
-  HTP: boolean;
+  HTP: boolean | string;
+  displayName?: string; // Add optional display name that's cleaned up
+}
+
+// Define more specific types for NER data entities
+interface EntityLocation {
+  name: string;
+  IPA: string;
+  HTP: boolean | string;
+}
+
+interface EntityOrganization {
+  name: string;
+  IPA: string;
+  HTP: boolean | string;
 }
 
 interface NerDataSummary {
@@ -127,29 +142,35 @@ interface NerDataSummary {
   person_count: number;
   location_count: number;
   organization_count: number;
-  person_entities_common: EntityItem[];
-  person_entities_unusual: EntityItem[];
-  location_entities_common: EntityItem[];
-  location_entities_unusual: EntityItem[];
-  organization_entities_common: EntityItem[];
-  organization_entities_unusual: EntityItem[];
+  person_entities_common: {
+    result: EntityItem[];
+  };
+  person_entities_unusual: {
+    "PDD Content": EntityItem[];
+  };
+  location_entities_common: EntityLocation[] | EntityLocation | Record<string, string>;
+  location_entities_unusual: EntityLocation[] | EntityLocation | Record<string, string>;
+  organization_entities_common: {
+    entities?: EntityItem[];
+  };
+  organization_entities_unusual: EntityOrganization[] | EntityOrganization | Record<string, string>;
 }
 
 // Update the NerData interface to match the actual structure
 interface NerData {
   book_summary: NerDataSummary;
-  chapters: string[];
+  chapters: Array<Record<string, string>>;
 }
 
 // Define the interface for the data returned by getNerDataFile
 interface NerDataFromApi {
   entities?: Array<{
     name: string;
-    HTP: boolean;
+    HTP: boolean | string;
     phoneme?: string;
   }>;
   book_summary?: NerDataSummary;
-  chapters?: string[];
+  chapters?: Array<Record<string, string>>;
 }
 
 // Helper functions for button states
@@ -383,10 +404,43 @@ export default function ProjectDetail() {
 
   // Set initial mode based on project metadata
   useEffect(() => {
-    if (project?.is_production_mode) {
-      setMode("production");
+    if (project?.current_mode) {
+      setMode(project.current_mode as "validation" | "production");
+    } else {
+      // Default to validation mode if no mode is set
+      setMode("validation");
     }
   }, [project]);
+
+  // Log mode changes and sync with database
+  useEffect(() => {
+    const syncModeWithDatabase = async () => {
+      if (!project) return;
+      
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+
+        // Only update if the mode doesn't match the database state
+        if (mode !== project.current_mode) {
+          const { error } = await supabase
+            .from('projects')
+            .update({
+              current_mode: mode
+            })
+            .eq('id', project.id);
+
+          if (error) {
+            console.error('Error syncing mode with database:', error);
+          }
+        }
+      } catch (error) {
+        console.error('Error syncing mode with database:', error);
+      }
+    };
+
+    syncModeWithDatabase();
+  }, [mode, project]);
 
   // Check if production mode can be enabled
   const canEnableProductionMode = useCallback(() => {
@@ -425,7 +479,7 @@ export default function ProjectDetail() {
       const { error: updateError } = await supabase
         .from('projects')
         .update({
-          is_production_mode: true
+          current_mode: "production"
         })
         .eq('id', project.id);
         
@@ -504,9 +558,59 @@ export default function ProjectDetail() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
       
+      let storedPath = "";
+      
+      // In validation mode, get the path from the projects table
+      if (mode === "validation") {
+        const { data: projectData, error: projectError } = await supabase
+          .from('projects')
+          .select('validation_hls_path')
+          .eq('id', project.id)
+          .eq('user_id', session.user.id)
+          .single()
+        
+        if (projectError) {
+          console.error('Error fetching validation HLS path:', projectError)
+          setHlsLoadError(`Could not retrieve streaming information: ${projectError.message}`)
+          setIsPreparingHls(false);
+          return
+        }
+        
+        if (!projectData?.validation_hls_path) {
+          setHlsLoadError('No validation streaming file found')
+          setIsPreparingHls(false);
+          return
+        }
+        
+        storedPath = projectData.validation_hls_path;
+      } else {
+        // In production mode, use the published_audiobooks table as before
+        const { data, error } = await supabase
+          .from('published_audiobooks')
+          .select('hls_path')
+          .eq('userid', session.user.id)
+          .eq('projectid', project.id)
+          .maybeSingle()
+        
+        if (error) {
+          console.error('Error fetching HLS path:', error)
+          setHlsLoadError(`Could not retrieve streaming information: ${error.message}`)
+          setIsPreparingHls(false);
+          return
+        }
+        
+        if (!data?.hls_path) {
+          setHlsLoadError('No streaming file found')
+          setIsPreparingHls(false);
+          return
+        }
+        
+        storedPath = data.hls_path;
+      }
+      
+      console.log('HLS path retrieved:', storedPath)
+      
       // Determine HLS path based on mode
-      // In validation mode: <userid>/<projectid>/streaming
-      // In production mode: streaming_assets/<userid>/<projectid>
       let hlsBasePath = "";
       if (mode === "validation") {
         hlsBasePath = `${session.user.id}/${project.id}/streaming`;
@@ -514,63 +618,32 @@ export default function ProjectDetail() {
         hlsBasePath = `streaming_assets/${session.user.id}/${project.id}`;
       }
       
-      console.log(`Looking for HLS in path: ${hlsBasePath}`)
+      // Check if the path matches our expected path for the current mode
+      const adjustedPath = storedPath.includes(hlsBasePath) ? 
+                          storedPath : 
+                          `${hlsBasePath}/${storedPath.split('/').pop()}`;
       
-      // Query published_audiobooks table to get hls_path
-      console.log(`Querying published_audiobooks for userid=${session.user.id} and projectid=${project.id}`)
+      console.log(`Using HLS path: ${adjustedPath}`);
       
-      // Use maybeSingle() instead of single() to prevent 406 errors when no rows match
-      const { data, error } = await supabase
-        .from('published_audiobooks')
-        .select('hls_path')
-        .eq('userid', session.user.id)
-        .eq('projectid', project.id)
-        .maybeSingle()
+      // Reset error state
+      setHlsLoadError(null)
       
-      if (error) {
-        console.error('Error fetching HLS path:', error)
-        setHlsLoadError(`Could not retrieve streaming information: ${error.message}`)
-        setIsPreparingHls(false);
-        return
-      }
-      
-      console.log('Query result:', data)
-      
-      if (data?.hls_path) {
-        console.log('HLS path retrieved from database:', data.hls_path)
+      try {
+        // Use our new helper to get a playable HLS URL with signed URLs
+        console.log('Generating signed URLs for HLS path')
         
-        // Check if the path matches our expected path for the current mode
-        // If not, we may need to update our path based on the current mode
-        const storedPath = data.hls_path;
-        const adjustedPath = storedPath.includes(hlsBasePath) ? 
-                            storedPath : 
-                            `${hlsBasePath}/${storedPath.split('/').pop()}`;
+        // Clear any existing URL first
+        setHlsPath(null);
         
-        console.log(`Using HLS path: ${adjustedPath}`);
+        // Generate the new stream URL
+        const streamUrl = await getHlsStreamUrl(adjustedPath)
+        console.log('HLS stream URL generated successfully')
         
-        // Reset error state
-        setHlsLoadError(null)
-        
-        try {
-          // Use our new helper to get a playable HLS URL with signed URLs
-          console.log('Generating signed URLs for HLS path')
-          
-          // Clear any existing URL first
-          setHlsPath(null);
-          
-          // Generate the new stream URL
-          const streamUrl = await getHlsStreamUrl(adjustedPath)
-          console.log('HLS stream URL generated successfully')
-          
-          // Only set the URL after it's fully prepared
-          setHlsPath(streamUrl)
-        } catch (signedUrlError) {
-          console.error('Failed to generate signed URLs:', signedUrlError)
-          setHlsLoadError('Failed to generate streaming URL')
-        }
-      } else {
-        setHlsLoadError('No streaming file found')
-        console.log('No HLS path found in database, but Audiobook_Status is Complete')
+        // Only set the URL after it's fully prepared
+        setHlsPath(streamUrl)
+      } catch (signedUrlError) {
+        console.error('Failed to generate signed URLs:', signedUrlError)
+        setHlsLoadError('Failed to generate streaming URL')
       }
     } catch (error) {
       console.error('Error in fetchHlsPath:', error)
@@ -1233,19 +1306,23 @@ export default function ProjectDetail() {
         // Only update voices if they've changed
         if (JSON.stringify(voices) !== JSON.stringify(voiceData.voices)) {
           setVoices(voiceData.voices)
-          // Set default selected voice if available
+          
+          // If project has a saved voice_id and it exists in the available voices, use it
           if (project?.voice_id && voiceData.voices.some(v => v.voice_id === project.voice_id)) {
-            // If project has a saved voice_id and it exists in the available voices, use it
             setSelectedVoice(project.voice_id)
+            setIsVoiceSelected(true)
           } else {
-            // Otherwise use the first voice
+            // If no voice is selected or the saved voice isn't available, use the first voice
             setSelectedVoice(voiceData.voices[0].voice_id)
+            // Only set isVoiceSelected to false if we're defaulting to first voice
+            setIsVoiceSelected(!!project?.voice_id)
           }
         }
         setVoiceDataError(null)
       } else {
         setVoices([])
         setSelectedVoice("")
+        setIsVoiceSelected(false)
         setVoiceDataError('No voices available. Please process the ebook first.')
       }
       
@@ -1322,6 +1399,13 @@ export default function ProjectDetail() {
           if (!session) return
           
           await loadVoiceAndNerData(session.user.id, project.id)
+          
+          // Set the selected voice from project data if it exists
+          if (project.voice_id) {
+            setSelectedVoice(project.voice_id)
+            // Also update isVoiceSelected state
+            setIsVoiceSelected(true)
+          }
         } catch (error) {
           console.error('Error checking for voice and NER data:', error)
         }
@@ -1914,14 +1998,17 @@ export default function ProjectDetail() {
       const selectedVoiceData = voices.find(v => v.voice_id === selectedVoice)
       if (!selectedVoiceData) throw new Error('Selected voice not found')
       
-      // Update project in database
+      // Update project in database with all required fields
       const { error } = await supabase
         .from('projects')
         .update({
           voice_id: selectedVoiceData.voice_id,
-          voice_name: selectedVoiceData.name
+          voice_name: selectedVoiceData.name,
+          pls_dict_name: masterDictionaryName,
+          pls_dict_file: `${masterDictionaryName}.pls`
         })
         .eq('id', project.id)
+        .eq('user_id', session.user.id)  // Add user_id check for extra security
       
       if (error) throw error
       
@@ -1932,7 +2019,9 @@ export default function ProjectDetail() {
       setProject({
         ...project,
         voice_id: selectedVoiceData.voice_id,
-        voice_name: selectedVoiceData.name
+        voice_name: selectedVoiceData.name,
+        pls_dict_name: masterDictionaryName,
+        pls_dict_file: `${masterDictionaryName}.pls`
       })
     } catch (error) {
       console.error('Error saving voice selection:', error)
@@ -2183,29 +2272,57 @@ export default function ProjectDetail() {
           let selectedEntity: EntityItem | null = null;
           
           if (category === 'person' && nameParts[0] === 'common') {
-            selectedEntity = nerData?.book_summary.person_entities_common.find(
+            selectedEntity = nerData?.book_summary.person_entities_common.result.find(
               (e: EntityItem) => e.name === nameParts.slice(1).join('-')
             ) || null;
           } else if (category === 'person' && nameParts[0] === 'unusual') {
-            selectedEntity = nerData?.book_summary.person_entities_unusual.find(
+            selectedEntity = nerData?.book_summary.person_entities_unusual["PDD Content"].find(
               (e: EntityItem) => e.name === nameParts.slice(1).join('-')
             ) || null;
           } else if (category === 'location' && nameParts[0] === 'common') {
-            selectedEntity = nerData?.book_summary.location_entities_common.find(
-              (e: EntityItem) => e.name === nameParts.slice(1).join('-')
-            ) || null;
+            // Handle location_entities_common with flexible structure
+            const locationEntities = nerData?.book_summary.location_entities_common;
+            if (typeof locationEntities === 'object' && locationEntities !== null) {
+              if (Array.isArray(locationEntities)) {
+                selectedEntity = locationEntities.find(
+                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                ) || null;
+              } else if (locationEntities.name === nameParts.slice(1).join('-')) {
+                selectedEntity = locationEntities as unknown as EntityItem;
+              }
+            }
           } else if (category === 'location' && nameParts[0] === 'unusual') {
-            selectedEntity = nerData?.book_summary.location_entities_unusual.find(
-              (e: EntityItem) => e.name === nameParts.slice(1).join('-')
-            ) || null;
+            // Handle location_entities_unusual with flexible structure
+            const locationEntities = nerData?.book_summary.location_entities_unusual;
+            if (typeof locationEntities === 'object' && locationEntities !== null) {
+              if (Array.isArray(locationEntities)) {
+                selectedEntity = locationEntities.find(
+                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                ) || null;
+              } else if (locationEntities.name === nameParts.slice(1).join('-')) {
+                selectedEntity = locationEntities as unknown as EntityItem;
+              }
+            }
           } else if (category === 'org' && nameParts[0] === 'common') {
-            selectedEntity = nerData?.book_summary.organization_entities_common.find(
-              (e: EntityItem) => e.name === nameParts.slice(1).join('-')
-            ) || null;
+            // Handle organization_entities_common with entities array
+            const orgEntities = nerData?.book_summary.organization_entities_common;
+            if (orgEntities?.entities && Array.isArray(orgEntities.entities)) {
+              selectedEntity = orgEntities.entities.find(
+                (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+              ) || null;
+            }
           } else if (category === 'org' && nameParts[0] === 'unusual') {
-            selectedEntity = nerData?.book_summary.organization_entities_unusual.find(
-              (e: EntityItem) => e.name === nameParts.slice(1).join('-')
-            ) || null;
+            // Handle organization_entities_unusual with flexible structure
+            const orgEntities = nerData?.book_summary.organization_entities_unusual;
+            if (typeof orgEntities === 'object' && orgEntities !== null) {
+              if (Array.isArray(orgEntities)) {
+                selectedEntity = orgEntities.find(
+                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                ) || null;
+              } else if (orgEntities.name === nameParts.slice(1).join('-')) {
+                selectedEntity = orgEntities as unknown as EntityItem;
+              }
+            }
           }
           
           if (selectedEntity) {
@@ -2634,23 +2751,19 @@ export default function ProjectDetail() {
       
       {/* Mode Toggle Buttons moved between project summary and tabs */}
       <div className="flex justify-center gap-4 mb-2">
-        {/* Validation Mode Button */}
-        <button
-          onClick={() => setMode("validation")}
+        {/* Validation Mode Indicator */}
+        <div
           className={`relative w-40 h-14 rounded-md flex flex-col overflow-hidden transition-all duration-300 ${
             mode === "validation" 
               ? "shadow-[0_0_15px_rgba(59,130,246,0.5)]" 
-              : mode === "production"
-                ? "shadow-md opacity-50 cursor-not-allowed"
-                : "shadow-md hover:shadow-lg"
+              : "shadow-md opacity-50"
           }`}
-          disabled={mode === "production"} // Once in production mode, can't go back
         >
           {/* Button Background with Gradient */}
           <div className={`absolute inset-0 ${
             mode === "validation"
               ? "bg-gradient-to-br from-blue-50 to-blue-100 border-2 border-blue-400"
-              : "bg-gradient-to-br from-gray-50 to-gray-100 border-2 border-gray-300 hover:border-gray-400"
+              : "bg-gradient-to-br from-gray-50 to-gray-100 border-2 border-gray-300"
           } rounded-md transition-all duration-300`}></div>
           
           {/* LED Indicator Container */}
@@ -2665,36 +2778,30 @@ export default function ProjectDetail() {
             ></div>
           </div>
           
-          {/* Button Content */}
+          {/* Content */}
           <div className={`absolute inset-0 pt-3 flex flex-col items-center justify-center transition-all duration-300`}>
             <span className={`font-semibold text-sm ${
               mode === "validation" ? "text-blue-700" : "text-gray-500"
-            }`}>VALIDATION</span>
+            }`}>VALIDATION MODE</span>
             <span className={`text-xs mt-0.5 ${
               mode === "validation" ? "text-blue-500" : "text-gray-400"
             }`}>Limited Run</span>
           </div>
-        </button>
+        </div>
         
-        {/* Production Mode Button */}
-        <button
-          onClick={handleProductionModeToggle}
+        {/* Production Mode Indicator */}
+        <div
           className={`relative w-40 h-14 rounded-md flex flex-col overflow-hidden transition-all duration-300 ${
             mode === "production" 
               ? "shadow-[0_0_15px_rgba(34,197,94,0.5)]" 
-              : canEnableProductionMode() 
-                ? "shadow-md hover:shadow-lg cursor-pointer" 
-                : "shadow-md opacity-60 cursor-not-allowed"
+              : "shadow-md opacity-60"
           }`}
-          disabled={mode === "production" || isActivatingProduction || !canEnableProductionMode()}
         >
           {/* Button Background with Gradient */}
           <div className={`absolute inset-0 ${
             mode === "production"
               ? "bg-gradient-to-br from-green-50 to-green-100 border-2 border-green-400"
-              : canEnableProductionMode()
-                ? "bg-gradient-to-br from-gray-50 to-gray-100 border-2 border-gray-300 hover:border-gray-400"
-                : "bg-gradient-to-br from-gray-50 to-gray-100 border-2 border-gray-300"
+              : "bg-gradient-to-br from-gray-50 to-gray-100 border-2 border-gray-300"
           } rounded-md transition-all duration-300`}></div>
           
           {/* LED Indicator Container */}
@@ -2709,11 +2816,11 @@ export default function ProjectDetail() {
             ></div>
           </div>
           
-          {/* Button Content */}
+          {/* Content */}
           <div className={`absolute inset-0 pt-3 flex flex-col items-center justify-center transition-all duration-300`}>
             <span className={`font-semibold text-sm ${
               mode === "production" ? "text-green-700" : "text-gray-500"
-            }`}>PRODUCTION</span>
+            }`}>PRODUCTION MODE</span>
             <span className={`text-xs mt-0.5 ${
               mode === "production" ? "text-green-500" : "text-gray-400"
             }`}>Full Book</span>
@@ -2723,7 +2830,7 @@ export default function ProjectDetail() {
               </div>
             )}
           </div>
-        </button>
+        </div>
       </div>
 
       <Tabs defaultValue={getInitialTab(projectStatus)} className="w-full">
@@ -2971,9 +3078,9 @@ export default function ProjectDetail() {
                 
                 {/* Right Column */}
                 <div>
-                  {/* Name Pronunciation Section - Conditionally enabled */}
+                  {/* Name Pronunciation Section - Only disabled if intake not complete */}
                   <div className={`space-y-4 border p-4 rounded-md ${
-                    projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" || mode === "production" 
+                    projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" 
                       ? 'opacity-50' 
                       : ''
                   }`}>
@@ -2983,8 +3090,8 @@ export default function ProjectDetail() {
                         variant="outline"
                         size="sm"
                         onClick={() => setIsViewCorrectionsOpen(true)}
-                        disabled={pronunciationCorrections.length === 0 || mode === "production"}
-                        className={pronunciationCorrections.length > 0 && mode !== "production" ? 
+                        disabled={pronunciationCorrections.length === 0}
+                        className={pronunciationCorrections.length > 0 ? 
                           "bg-green-600 text-white hover:bg-green-700 border-green-500" : 
                           ""}
                       >
@@ -2993,11 +3100,6 @@ export default function ProjectDetail() {
                     </div>
                     <p className="text-sm text-gray-600">
                       View pronunciation guides for names and entities in your book. Only correct the pronunciation if needed, otherwise simply check to ensure unusual names sound as you intended.
-                      {mode === "production" && (
-                        <span className="block mt-1 text-amber-600">
-                          Pronunciation editing is locked in production mode.
-                        </span>
-                      )}
                     </p>
                     
                     {nerData ? (
@@ -3008,14 +3110,14 @@ export default function ProjectDetail() {
                               value={selectedNameEntity}
                               onChange={(e) => setSelectedNameEntity(e.target.value)}
                               className="w-full p-2 border rounded"
-                              disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete" || mode === "production"}
+                              disabled={projectStatus?.Ebook_Prep_Status !== "Ebook Processing Complete"}
                             >
                               <option value="">Select a name or entity</option>
                               
                               {/* Person - Common */}
-                              {nerData.book_summary?.person_entities_common?.length > 0 && (
+                              {nerData.book_summary?.person_entities_common?.result?.length > 0 && (
                                 <optgroup label="Person - Common">
-                                  {[...nerData.book_summary.person_entities_common]
+                                  {[...nerData.book_summary.person_entities_common.result]
                                     .sort((a, b) => a.name.localeCompare(b.name))
                                     .map((entity: EntityItem) => (
                                     <option key={`person-common-${entity.name}`} value={`person-common-${entity.name}`}>
@@ -3026,9 +3128,9 @@ export default function ProjectDetail() {
                               )}
                               
                               {/* Person - Unusual */}
-                              {nerData.book_summary?.person_entities_unusual?.length > 0 && (
+                              {nerData.book_summary?.person_entities_unusual["PDD Content"]?.length > 0 && (
                                 <optgroup label="Person - Unusual">
-                                  {[...nerData.book_summary.person_entities_unusual]
+                                  {[...nerData.book_summary.person_entities_unusual["PDD Content"]]
                                     .sort((a, b) => a.name.localeCompare(b.name))
                                     .map((entity: EntityItem) => (
                                     <option key={`person-unusual-${entity.name}`} value={`person-unusual-${entity.name}`}>
@@ -3038,57 +3140,156 @@ export default function ProjectDetail() {
                                 </optgroup>
                               )}
                               
-                              {/* Location - Common */}
-                              {nerData.book_summary?.location_entities_common?.length > 0 && (
-                                <optgroup label="Location - Common">
-                                  {[...nerData.book_summary.location_entities_common]
-                                    .sort((a, b) => a.name.localeCompare(b.name))
-                                    .map((entity: EntityItem) => (
-                                    <option key={`location-common-${entity.name}`} value={`location-common-${entity.name}`}>
-                                      {entity.name}
-                                    </option>
-                                  ))}
-                                </optgroup>
-                              )}
+                              {/* Location - Common - Update to handle the object format safely */}
+                              {(() => {
+                                const locEntities = nerData?.book_summary?.location_entities_common;
+                                if (!locEntities) return null;
+                                
+                                if (typeof locEntities === 'object') {
+                                  // If it's a single object with name property
+                                  if ('name' in locEntities) {
+                                    return (
+                                      <optgroup label="Location - Common">
+                                        <option 
+                                          key={`location-common-${locEntities.name}`} 
+                                          value={`location-common-${locEntities.name}`}
+                                        >
+                                          {locEntities.name}
+                                        </option>
+                                      </optgroup>
+                                    );
+                                  }
+                                  
+                                  // If it's an array and has items
+                                  if (Array.isArray(locEntities) && locEntities.length > 0) {
+                                    return (
+                                      <optgroup label="Location - Common">
+                                        {locEntities
+                                          .sort((a, b) => a.name.localeCompare(b.name))
+                                          .map((entity: EntityItem) => (
+                                            <option 
+                                              key={`location-common-${entity.name}`} 
+                                              value={`location-common-${entity.name}`}
+                                            >
+                                              {entity.name}
+                                            </option>
+                                          ))
+                                        }
+                                      </optgroup>
+                                    );
+                                  }
+                                }
+                                
+                                return null;
+                              })()}
                               
-                              {/* Location - Unusual */}
-                              {nerData.book_summary?.location_entities_unusual?.length > 0 && (
-                                <optgroup label="Location - Unusual">
-                                  {[...nerData.book_summary.location_entities_unusual]
-                                    .sort((a, b) => a.name.localeCompare(b.name))
-                                    .map((entity: EntityItem) => (
-                                    <option key={`location-unusual-${entity.name}`} value={`location-unusual-${entity.name}`}>
-                                      {entity.name}
-                                    </option>
-                                  ))}
-                                </optgroup>
-                              )}
+                              {/* Location - Unusual - Update to handle the object format safely */}
+                              {(() => {
+                                const locEntities = nerData?.book_summary?.location_entities_unusual;
+                                if (!locEntities) return null;
+                                
+                                if (typeof locEntities === 'object') {
+                                  // If it's a single object with name property
+                                  if ('name' in locEntities) {
+                                    return (
+                                      <optgroup label="Location - Unusual">
+                                        <option 
+                                          key={`location-unusual-${locEntities.name}`} 
+                                          value={`location-unusual-${locEntities.name}`}
+                                        >
+                                          {locEntities.name}
+                                        </option>
+                                      </optgroup>
+                                    );
+                                  }
+                                  
+                                  // If it's an array and has items
+                                  if (Array.isArray(locEntities) && locEntities.length > 0) {
+                                    return (
+                                      <optgroup label="Location - Unusual">
+                                        {locEntities
+                                          .sort((a, b) => a.name.localeCompare(b.name))
+                                          .map((entity: EntityItem) => (
+                                            <option 
+                                              key={`location-unusual-${entity.name}`} 
+                                              value={`location-unusual-${entity.name}`}
+                                            >
+                                              {entity.name}
+                                            </option>
+                                          ))
+                                        }
+                                      </optgroup>
+                                    );
+                                  }
+                                }
+                                
+                                return null;
+                              })()}
                               
-                              {/* Organization - Common */}
-                              {nerData.book_summary?.organization_entities_common?.length > 0 && (
-                                <optgroup label="Organization - Common">
-                                  {[...nerData.book_summary.organization_entities_common]
-                                    .sort((a, b) => a.name.localeCompare(b.name))
-                                    .map((entity: EntityItem) => (
-                                    <option key={`org-common-${entity.name}`} value={`org-common-${entity.name}`}>
-                                      {entity.name}
-                                    </option>
-                                  ))}
-                                </optgroup>
-                              )}
+                              {/* Organization - Common - Update to handle the entities array safely */}
+                              {(() => {
+                                const orgEntities = nerData?.book_summary?.organization_entities_common?.entities;
+                                if (!orgEntities || orgEntities.length === 0) return null;
+                                
+                                return (
+                                  <optgroup label="Organization - Common">
+                                    {orgEntities
+                                      .sort((a, b) => a.name.localeCompare(b.name))
+                                      .map((entity: EntityItem) => (
+                                        <option 
+                                          key={`org-common-${entity.name}`} 
+                                          value={`org-common-${entity.name}`}
+                                        >
+                                          {entity.name}
+                                        </option>
+                                      ))
+                                    }
+                                  </optgroup>
+                                );
+                              })()}
                               
-                              {/* Organization - Unusual */}
-                              {nerData.book_summary?.organization_entities_unusual?.length > 0 && (
-                                <optgroup label="Organization - Unusual">
-                                  {[...nerData.book_summary.organization_entities_unusual]
-                                    .sort((a, b) => a.name.localeCompare(b.name))
-                                    .map((entity: EntityItem) => (
-                                    <option key={`org-unusual-${entity.name}`} value={`org-unusual-${entity.name}`}>
-                                      {entity.name}
-                                    </option>
-                                  ))}
-                                </optgroup>
-                              )}
+                              {/* Organization - Unusual - Update to handle the object format safely */}
+                              {(() => {
+                                const orgEntities = nerData?.book_summary?.organization_entities_unusual;
+                                if (!orgEntities) return null;
+                                
+                                if (typeof orgEntities === 'object') {
+                                  // If it's a single object with name property
+                                  if ('name' in orgEntities) {
+                                    return (
+                                      <optgroup label="Organization - Unusual">
+                                        <option 
+                                          key={`org-unusual-${orgEntities.name}`} 
+                                          value={`org-unusual-${orgEntities.name}`}
+                                        >
+                                          {orgEntities.name}
+                                        </option>
+                                      </optgroup>
+                                    );
+                                  }
+                                  
+                                  // If it's an array and has items
+                                  if (Array.isArray(orgEntities) && orgEntities.length > 0) {
+                                    return (
+                                      <optgroup label="Organization - Unusual">
+                                        {orgEntities
+                                          .sort((a, b) => a.name.localeCompare(b.name))
+                                          .map((entity: EntityItem) => (
+                                            <option 
+                                              key={`org-unusual-${entity.name}`} 
+                                              value={`org-unusual-${entity.name}`}
+                                            >
+                                              {entity.name}
+                                            </option>
+                                          ))
+                                        }
+                                      </optgroup>
+                                    );
+                                  }
+                                }
+                                
+                                return null;
+                              })()}
                             </select>
                           </div>
                           
@@ -3101,29 +3302,57 @@ export default function ProjectDetail() {
                               let selectedEntity: EntityItem | null = null
                               
                               if (category === 'person' && nameParts[0] === 'common') {
-                                selectedEntity = nerData.book_summary.person_entities_common.find(
+                                selectedEntity = nerData.book_summary.person_entities_common.result.find(
                                   (e: EntityItem) => e.name === nameParts.slice(1).join('-')
                                 ) || null
                               } else if (category === 'person' && nameParts[0] === 'unusual') {
-                                selectedEntity = nerData.book_summary.person_entities_unusual.find(
+                                selectedEntity = nerData.book_summary.person_entities_unusual["PDD Content"].find(
                                   (e: EntityItem) => e.name === nameParts.slice(1).join('-')
                                 ) || null
                               } else if (category === 'location' && nameParts[0] === 'common') {
-                                selectedEntity = nerData.book_summary.location_entities_common.find(
-                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
-                                ) || null
+                                // Handle location_entities_common with flexible structure
+                                const locationEntities = nerData.book_summary.location_entities_common;
+                                if (typeof locationEntities === 'object' && locationEntities !== null) {
+                                  if (Array.isArray(locationEntities)) {
+                                    selectedEntity = locationEntities.find(
+                                      (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                    ) || null;
+                                  } else if (locationEntities.name === nameParts.slice(1).join('-')) {
+                                    selectedEntity = locationEntities as unknown as EntityItem;
+                                  }
+                                }
                               } else if (category === 'location' && nameParts[0] === 'unusual') {
-                                selectedEntity = nerData.book_summary.location_entities_unusual.find(
-                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
-                                ) || null
+                                // Handle location_entities_unusual with flexible structure
+                                const locationEntities = nerData.book_summary.location_entities_unusual;
+                                if (typeof locationEntities === 'object' && locationEntities !== null) {
+                                  if (Array.isArray(locationEntities)) {
+                                    selectedEntity = locationEntities.find(
+                                      (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                    ) || null;
+                                  } else if (locationEntities.name === nameParts.slice(1).join('-')) {
+                                    selectedEntity = locationEntities as unknown as EntityItem;
+                                  }
+                                }
                               } else if (category === 'org' && nameParts[0] === 'common') {
-                                selectedEntity = nerData.book_summary.organization_entities_common.find(
-                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
-                                ) || null
+                                // Handle organization_entities_common with entities array
+                                const orgEntities = nerData.book_summary.organization_entities_common;
+                                if (orgEntities?.entities && Array.isArray(orgEntities.entities)) {
+                                  selectedEntity = orgEntities.entities.find(
+                                    (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                  ) || null;
+                                }
                               } else if (category === 'org' && nameParts[0] === 'unusual') {
-                                selectedEntity = nerData.book_summary.organization_entities_unusual.find(
-                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
-                                ) || null
+                                // Handle organization_entities_unusual with flexible structure
+                                const orgEntities = nerData.book_summary.organization_entities_unusual;
+                                if (typeof orgEntities === 'object' && orgEntities !== null) {
+                                  if (Array.isArray(orgEntities)) {
+                                    selectedEntity = orgEntities.find(
+                                      (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                    ) || null;
+                                  } else if (orgEntities.name === nameParts.slice(1).join('-')) {
+                                    selectedEntity = orgEntities as unknown as EntityItem;
+                                  }
+                                }
                               }
                               
                               if (selectedEntity) {
@@ -3148,29 +3377,57 @@ export default function ProjectDetail() {
                               let selectedEntity: EntityItem | null = null
                               
                               if (category === 'person' && nameParts[0] === 'common') {
-                                selectedEntity = nerData.book_summary.person_entities_common.find(
+                                selectedEntity = nerData.book_summary.person_entities_common.result.find(
                                   (e: EntityItem) => e.name === nameParts.slice(1).join('-')
                                 ) || null
                               } else if (category === 'person' && nameParts[0] === 'unusual') {
-                                selectedEntity = nerData.book_summary.person_entities_unusual.find(
+                                selectedEntity = nerData.book_summary.person_entities_unusual["PDD Content"].find(
                                   (e: EntityItem) => e.name === nameParts.slice(1).join('-')
                                 ) || null
                               } else if (category === 'location' && nameParts[0] === 'common') {
-                                selectedEntity = nerData.book_summary.location_entities_common.find(
-                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
-                                ) || null
+                                // Handle location_entities_common with flexible structure
+                                const locationEntities = nerData.book_summary.location_entities_common;
+                                if (typeof locationEntities === 'object' && locationEntities !== null) {
+                                  if (Array.isArray(locationEntities)) {
+                                    selectedEntity = locationEntities.find(
+                                      (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                    ) || null;
+                                  } else if (locationEntities.name === nameParts.slice(1).join('-')) {
+                                    selectedEntity = locationEntities as unknown as EntityItem;
+                                  }
+                                }
                               } else if (category === 'location' && nameParts[0] === 'unusual') {
-                                selectedEntity = nerData.book_summary.location_entities_unusual.find(
-                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
-                                ) || null
+                                // Handle location_entities_unusual with flexible structure
+                                const locationEntities = nerData.book_summary.location_entities_unusual;
+                                if (typeof locationEntities === 'object' && locationEntities !== null) {
+                                  if (Array.isArray(locationEntities)) {
+                                    selectedEntity = locationEntities.find(
+                                      (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                    ) || null;
+                                  } else if (locationEntities.name === nameParts.slice(1).join('-')) {
+                                    selectedEntity = locationEntities as unknown as EntityItem;
+                                  }
+                                }
                               } else if (category === 'org' && nameParts[0] === 'common') {
-                                selectedEntity = nerData.book_summary.organization_entities_common.find(
-                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
-                                ) || null
+                                // Handle organization_entities_common with entities array
+                                const orgEntities = nerData.book_summary.organization_entities_common;
+                                if (orgEntities?.entities && Array.isArray(orgEntities.entities)) {
+                                  selectedEntity = orgEntities.entities.find(
+                                    (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                  ) || null;
+                                }
                               } else if (category === 'org' && nameParts[0] === 'unusual') {
-                                selectedEntity = nerData.book_summary.organization_entities_unusual.find(
-                                  (e: EntityItem) => e.name === nameParts.slice(1).join('-')
-                                ) || null
+                                // Handle organization_entities_unusual with flexible structure
+                                const orgEntities = nerData.book_summary.organization_entities_unusual;
+                                if (typeof orgEntities === 'object' && orgEntities !== null) {
+                                  if (Array.isArray(orgEntities)) {
+                                    selectedEntity = orgEntities.find(
+                                      (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+                                    ) || null;
+                                  } else if (orgEntities.name === nameParts.slice(1).join('-')) {
+                                    selectedEntity = orgEntities as unknown as EntityItem;
+                                  }
+                                }
                               }
                               
                               if (selectedEntity) {
@@ -3212,7 +3469,6 @@ export default function ProjectDetail() {
                                 placeholder="Enter a phonetic spelling"
                                 id="test-name-input"
                                 className="w-full p-2 border rounded"
-                                disabled={mode === "production"}
                               />
                             </div>
                             <div className="flex gap-2">
@@ -3225,7 +3481,7 @@ export default function ProjectDetail() {
                                     toast.error('Please enter a name')
                                   }
                                 }}
-                                disabled={isPlayingNameAudio || !selectedVoice || mode === "production"}
+                                disabled={isPlayingNameAudio || !selectedVoice}
                                 className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
                               >
                                 {isPlayingNameAudio ? 'Playing...' : 'Hear Name'}
@@ -3239,14 +3495,14 @@ export default function ProjectDetail() {
                                     toast.error('Please enter a name')
                                   }
                                 }}
-                                disabled={isLoadingIpa || mode === "production"}
+                                disabled={isLoadingIpa}
                                 className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-400"
                               >
                                 {isLoadingIpa ? 'Loading...' : 'Get IPA'}
                               </button>
                               <button
                                 onClick={() => confirmIpaForAudiobook('corrected')}
-                                disabled={!gptIpaPronunciation || isUseIpaButtonDisabled || mode === "production"}
+                                disabled={!gptIpaPronunciation || isUseIpaButtonDisabled}
                                 className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400"
                               >
                                 Use this IPA
@@ -3289,7 +3545,6 @@ export default function ProjectDetail() {
                                 placeholder="Enter Name"
                                 id="book-name-input"
                                 className="w-full p-2 border rounded"
-                                disabled={mode === "production"}
                               />
                             </div>
                             <div className="flex gap-2 mt-6">
@@ -3318,7 +3573,6 @@ export default function ProjectDetail() {
                                 placeholder="Add Pronunciation if Needed"
                                 id="new-name-input"
                                 className="w-full p-2 border rounded"
-                                disabled={mode === "production"}
                               />
                             </div>
                             <div className="flex gap-2 mt-6">
