@@ -1,0 +1,7 @@
+// Fix for line 3382
+// Handle backward compatibility with old format
+else if (category === 'person' && nameParts[0] === 'common') {
+  selectedEntity = nerData?.book_summary?.person_entities_common?.result?.find(
+    (e: EntityItem) => e.name === nameParts.slice(1).join('-')
+  ) || null
+} 

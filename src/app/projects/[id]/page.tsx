@@ -120,7 +120,7 @@ interface ProjectStatus {
 interface EntityItem {
   name: string;
   IPA: string;
-  HTP: boolean | string;
+  HTP?: boolean | string;
   displayName?: string; // Add optional display name that's cleaned up
 }
 
@@ -128,38 +128,44 @@ interface EntityItem {
 interface EntityLocation {
   name: string;
   IPA: string;
-  HTP: boolean | string;
+  HTP?: boolean | string;
 }
 
 interface EntityOrganization {
   name: string;
   IPA: string;
-  HTP: boolean | string;
+  HTP?: boolean | string;
 }
 
+// Update the NerDataSummary interface to match the new format
 interface NerDataSummary {
-  total_chapters: number;
-  person_count: number;
-  location_count: number;
-  organization_count: number;
-  person_entities_common: {
+  total_chapters?: number;
+  person_count?: number;
+  location_count?: number;
+  organization_count?: number;
+  // Keep these properties for backward compatibility
+  person_entities_common?: {
     result: EntityItem[];
   };
-  person_entities_unusual: {
+  person_entities_unusual?: {
     "PDD Content": EntityItem[];
   };
-  location_entities_common: EntityLocation[] | EntityLocation | Record<string, string>;
-  location_entities_unusual: EntityLocation[] | EntityLocation | Record<string, string>;
-  organization_entities_common: {
+  location_entities_common?: EntityLocation[] | EntityLocation | Record<string, string>;
+  location_entities_unusual?: EntityLocation[] | EntityLocation | Record<string, string>;
+  organization_entities_common?: {
     entities?: EntityItem[];
   };
-  organization_entities_unusual: EntityOrganization[] | EntityOrganization | Record<string, string>;
+  organization_entities_unusual?: EntityOrganization[] | EntityOrganization | Record<string, string>;
 }
 
-// Update the NerData interface to match the actual structure
+// Update the NerData interface to match the new format
 interface NerData {
-  book_summary: NerDataSummary;
-  chapters: Array<Record<string, string>>;
+  summary?: NerDataSummary;
+  PERSON?: EntityItem[];
+  LOC?: EntityLocation[];
+  ORG?: EntityOrganization[];
+  book_summary?: NerDataSummary; // For backward compatibility
+  chapters?: Array<Record<string, string>>;
 }
 
 // Define the interface for the data returned by getNerDataFile
@@ -169,7 +175,11 @@ interface NerDataFromApi {
     HTP: boolean | string;
     phoneme?: string;
   }>;
-  book_summary?: NerDataSummary;
+  summary?: NerDataSummary;
+  PERSON?: EntityItem[];
+  LOC?: EntityLocation[];
+  ORG?: EntityOrganization[];
+  book_summary?: NerDataSummary; // For backward compatibility
   chapters?: Array<Record<string, string>>;
 }
 
@@ -332,6 +342,19 @@ export default function ProjectDetail() {
   const [processingNewAudio, setProcessingNewAudio] = useState<Set<number>>(new Set())
   // Add a state to track audio remount keys
   const [audioRemountKeys, setAudioRemountKeys] = useState<Record<number, number>>({});
+  
+  // Add state for R2 service availability tracking
+  const [r2ServiceState, setR2ServiceState] = useState<{
+    available: boolean;
+    lastAttemptTime: number;
+    consecutiveFailures: number;
+    backoffDelay: number;
+  }>({
+    available: true,
+    lastAttemptTime: 0,
+    consecutiveFailures: 0,
+    backoffDelay: 1000, // Start with 1 second delay
+  });
   
   // Add voice-related state
   const [voices, setVoices] = useState<Voice[]>([])
@@ -1046,7 +1069,19 @@ export default function ProjectDetail() {
           console.log('NER data:', nerData)
           // Cast to the correct type and check if it has the expected structure
           const typedNerData = nerData as unknown as NerDataFromApi;
-          if (typedNerData.book_summary) {
+          
+          // Check for new format first (with PERSON, LOC, ORG arrays)
+          if (typedNerData.PERSON || typedNerData.LOC || typedNerData.ORG) {
+            setNerData({
+              summary: typedNerData.summary,
+              PERSON: typedNerData.PERSON || [],
+              LOC: typedNerData.LOC || [],
+              ORG: typedNerData.ORG || [],
+              chapters: typedNerData.chapters || []
+            });
+          } 
+          // Fall back to old format
+          else if (typedNerData.book_summary) {
             setNerData({
               book_summary: typedNerData.book_summary,
               chapters: typedNerData.chapters || []
@@ -1065,6 +1100,16 @@ export default function ProjectDetail() {
         console.error('Error loading NER data:', error)
       }
 
+      // Check if we should attempt to fetch signed URLs based on backoff strategy
+      const now = Date.now();
+      const canAttemptFetch = r2ServiceState.available || 
+                             (now - r2ServiceState.lastAttemptTime > r2ServiceState.backoffDelay);
+      
+      if (!canAttemptFetch) {
+        console.log(`Skipping signed URL fetch - R2 unavailable, next attempt in ${Math.ceil((r2ServiceState.lastAttemptTime + r2ServiceState.backoffDelay - now) / 1000)}s`);
+        return;
+      }
+      
       // Step 1: Get signed URLs for all files with retry logic
       let signedFiles: Array<{
         type: string;
@@ -1075,26 +1120,55 @@ export default function ProjectDetail() {
       let attempts = 0;
       const maxAttempts = 3;
       
-      while (attempts < maxAttempts) {
-        try {
-          signedFiles = await getSignedImageUrls(session.user.id, project.id);
-          break; // If successful, exit the loop
-        } catch (fetchError) {
-          attempts++;
-          if (fetchError instanceof Error && fetchError.name === 'TimeoutError') {
-            console.warn(`Attempt ${attempts}/${maxAttempts}: Timeout when fetching signed URLs. Retrying...`);
-            // Short delay before retry
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          } else {
-            // If it's not a timeout error, rethrow
-            throw fetchError;
+      try {
+        while (attempts < maxAttempts) {
+          try {
+            signedFiles = await getSignedImageUrls(session.user.id, project.id);
+            
+            // Reset R2 service state on successful fetch
+            if (!r2ServiceState.available || r2ServiceState.consecutiveFailures > 0) {
+              setR2ServiceState({
+                available: true,
+                lastAttemptTime: now,
+                consecutiveFailures: 0,
+                backoffDelay: 1000
+              });
+              console.log('R2 service is now available');
+            }
+            
+            break; // If successful, exit the loop
+          } catch (fetchError) {
+            attempts++;
+            if (fetchError instanceof Error && fetchError.name === 'TimeoutError') {
+              console.warn(`Attempt ${attempts}/${maxAttempts}: Timeout when fetching signed URLs. Retrying...`);
+              // Short delay before retry
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            } else {
+              // If it's not a timeout error, rethrow
+              throw fetchError;
+            }
           }
         }
-      }
-      
-      if (attempts === maxAttempts) {
-        console.error('Maximum retry attempts reached when fetching signed URLs');
-        toast.error('Some images could not be loaded. Try refreshing the page.');
+        
+        if (attempts === maxAttempts) {
+          throw new Error('Maximum retry attempts reached when fetching signed URLs');
+        }
+      } catch (error: unknown) {
+        // Update R2 service state on failure
+        const newConsecutiveFailures = r2ServiceState.consecutiveFailures + 1;
+        // Calculate exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s (cap at ~4 min)
+        const newBackoffDelay = Math.min(2 ** newConsecutiveFailures * 1000, 240000);
+        
+        setR2ServiceState({
+          available: false,
+          lastAttemptTime: now,
+          consecutiveFailures: newConsecutiveFailures,
+          backoffDelay: newBackoffDelay
+        });
+        
+        console.error(`R2 service unavailable (${newConsecutiveFailures} consecutive failures). Next attempt in ${newBackoffDelay/1000}s`, error);
+        toast.error('Some images could not be loaded. System will automatically retry later.');
+        return;
       }
       
       // Filter signed files based on file type and path
@@ -1219,7 +1293,7 @@ export default function ProjectDetail() {
     } finally {
       setLoading(false)
     }
-  }, [params.id])
+  }, [params.id, r2ServiceState]);
 
   useEffect(() => {
     fetchProject()
@@ -1259,7 +1333,17 @@ export default function ProjectDetail() {
             console.log('Project status changed, refreshing files')
             setProjectStatus(newStatus)
             setProcessingNewImageSet(new Set())
-            await fetchProject()
+            
+            // Check if we should attempt to fetch project data
+            const now = Date.now();
+            const canAttemptFetch = r2ServiceState.available || 
+                                  (now - r2ServiceState.lastAttemptTime > r2ServiceState.backoffDelay);
+            
+            if (canAttemptFetch) {
+              await fetchProject()
+            } else {
+              console.log(`Skipping fetchProject after status change - R2 unavailable, next attempt in ${Math.ceil((r2ServiceState.lastAttemptTime + r2ServiceState.backoffDelay - now) / 1000)}s`);
+            }
           } else {
             // Status hasn't changed, just update the status
             setProjectStatus(newStatus)
@@ -1277,7 +1361,7 @@ export default function ProjectDetail() {
         clearInterval(pollingInterval)
       }
     }
-  }, [project, projectStatus, fetchProject])
+  }, [project, projectStatus, fetchProject, r2ServiceState]);
 
   // Add a useEffect to monitor project status changes
   useEffect(() => {
@@ -2272,16 +2356,16 @@ export default function ProjectDetail() {
           let selectedEntity: EntityItem | null = null;
           
           if (category === 'person' && nameParts[0] === 'common') {
-            selectedEntity = nerData?.book_summary.person_entities_common.result.find(
+            selectedEntity = nerData?.book_summary?.person_entities_common?.result?.find(
               (e: EntityItem) => e.name === nameParts.slice(1).join('-')
             ) || null;
           } else if (category === 'person' && nameParts[0] === 'unusual') {
-            selectedEntity = nerData?.book_summary.person_entities_unusual["PDD Content"].find(
+            selectedEntity = nerData?.book_summary?.person_entities_unusual?.["PDD Content"]?.find(
               (e: EntityItem) => e.name === nameParts.slice(1).join('-')
             ) || null;
           } else if (category === 'location' && nameParts[0] === 'common') {
             // Handle location_entities_common with flexible structure
-            const locationEntities = nerData?.book_summary.location_entities_common;
+            const locationEntities = nerData?.book_summary?.location_entities_common;
             if (typeof locationEntities === 'object' && locationEntities !== null) {
               if (Array.isArray(locationEntities)) {
                 selectedEntity = locationEntities.find(
@@ -2293,7 +2377,7 @@ export default function ProjectDetail() {
             }
           } else if (category === 'location' && nameParts[0] === 'unusual') {
             // Handle location_entities_unusual with flexible structure
-            const locationEntities = nerData?.book_summary.location_entities_unusual;
+            const locationEntities = nerData?.book_summary?.location_entities_unusual;
             if (typeof locationEntities === 'object' && locationEntities !== null) {
               if (Array.isArray(locationEntities)) {
                 selectedEntity = locationEntities.find(
@@ -2305,7 +2389,7 @@ export default function ProjectDetail() {
             }
           } else if (category === 'org' && nameParts[0] === 'common') {
             // Handle organization_entities_common with entities array
-            const orgEntities = nerData?.book_summary.organization_entities_common;
+            const orgEntities = nerData?.book_summary?.organization_entities_common;
             if (orgEntities?.entities && Array.isArray(orgEntities.entities)) {
               selectedEntity = orgEntities.entities.find(
                 (e: EntityItem) => e.name === nameParts.slice(1).join('-')
@@ -2313,7 +2397,7 @@ export default function ProjectDetail() {
             }
           } else if (category === 'org' && nameParts[0] === 'unusual') {
             // Handle organization_entities_unusual with flexible structure
-            const orgEntities = nerData?.book_summary.organization_entities_unusual;
+            const orgEntities = nerData?.book_summary?.organization_entities_unusual;
             if (typeof orgEntities === 'object' && orgEntities !== null) {
               if (Array.isArray(orgEntities)) {
                 selectedEntity = orgEntities.find(
@@ -3114,10 +3198,51 @@ export default function ProjectDetail() {
                             >
                               <option value="">Select a name or entity</option>
                               
-                              {/* Person - Common */}
-                              {nerData.book_summary?.person_entities_common?.result?.length > 0 && (
+                              {/* New format: PERSON */}
+                              {nerData?.PERSON && nerData.PERSON.length > 0 && (
+                                <optgroup label="Person">
+                                  {[...nerData.PERSON]
+                                    .sort((a, b) => a.name.localeCompare(b.name))
+                                    .map((entity: EntityItem, idx) => (
+                                    <option key={`person-${entity.name}-${idx}`} value={`person-${entity.name}`}>
+                                      {entity.name}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              
+                              {/* New format: LOC */}
+                              {nerData?.LOC && nerData.LOC.length > 0 && (
+                                <optgroup label="Location">
+                                  {[...nerData.LOC]
+                                    .sort((a, b) => a.name.localeCompare(b.name))
+                                    .map((entity: EntityLocation, idx) => (
+                                    <option key={`location-${entity.name}-${idx}`} value={`location-${entity.name}`}>
+                                      {entity.name}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              
+                              {/* New format: ORG */}
+                              {nerData?.ORG && nerData.ORG.length > 0 && (
+                                <optgroup label="Organization">
+                                  {[...nerData.ORG]
+                                    .sort((a, b) => a.name.localeCompare(b.name))
+                                    .map((entity: EntityOrganization, idx) => (
+                                    <option key={`org-${entity.name}-${idx}`} value={`org-${entity.name}`}>
+                                      {entity.name}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              
+                              {/* For backward compatibility with old format */}
+                              {nerData?.book_summary?.person_entities_common?.result && 
+                               nerData.book_summary?.person_entities_common?.result.length > 0 && 
+                               !nerData?.PERSON && (
                                 <optgroup label="Person - Common">
-                                  {[...nerData.book_summary.person_entities_common.result]
+                                  {[...nerData?.book_summary?.person_entities_common?.result || []]
                                     .sort((a, b) => a.name.localeCompare(b.name))
                                     .map((entity: EntityItem) => (
                                     <option key={`person-common-${entity.name}`} value={`person-common-${entity.name}`}>
@@ -3127,10 +3252,12 @@ export default function ProjectDetail() {
                                 </optgroup>
                               )}
                               
-                              {/* Person - Unusual */}
-                              {nerData.book_summary?.person_entities_unusual["PDD Content"]?.length > 0 && (
+                              {/* Person - Unusual (for backward compatibility) */}
+                              {nerData?.book_summary?.person_entities_unusual?.["PDD Content"] && 
+                               nerData.book_summary?.person_entities_unusual?.["PDD Content"].length > 0 && 
+                               !nerData?.PERSON && (
                                 <optgroup label="Person - Unusual">
-                                  {[...nerData.book_summary.person_entities_unusual["PDD Content"]]
+                                  {[...nerData?.book_summary?.person_entities_unusual?.["PDD Content"] || []]
                                     .sort((a, b) => a.name.localeCompare(b.name))
                                     .map((entity: EntityItem) => (
                                     <option key={`person-unusual-${entity.name}`} value={`person-unusual-${entity.name}`}>
@@ -3140,8 +3267,9 @@ export default function ProjectDetail() {
                                 </optgroup>
                               )}
                               
-                              {/* Location - Common - Update to handle the object format safely */}
-                              {(() => {
+                              {/* Keep previous location and organization code for backward compatibility */}
+                              {/* Only show if we don't have the new format */}
+                              {!nerData?.LOC && (() => {
                                 const locEntities = nerData?.book_summary?.location_entities_common;
                                 if (!locEntities) return null;
                                 
@@ -3183,8 +3311,8 @@ export default function ProjectDetail() {
                                 return null;
                               })()}
                               
-                              {/* Location - Unusual - Update to handle the object format safely */}
-                              {(() => {
+                              {/* Location - Unusual (for backward compatibility) */}
+                              {!nerData?.LOC && (() => {
                                 const locEntities = nerData?.book_summary?.location_entities_unusual;
                                 if (!locEntities) return null;
                                 
@@ -3226,8 +3354,8 @@ export default function ProjectDetail() {
                                 return null;
                               })()}
                               
-                              {/* Organization - Common - Update to handle the entities array safely */}
-                              {(() => {
+                              {/* Organization - Common (for backward compatibility) */}
+                              {!nerData?.ORG && (() => {
                                 const orgEntities = nerData?.book_summary?.organization_entities_common?.entities;
                                 if (!orgEntities || orgEntities.length === 0) return null;
                                 
@@ -3248,8 +3376,8 @@ export default function ProjectDetail() {
                                 );
                               })()}
                               
-                              {/* Organization - Unusual - Update to handle the object format safely */}
-                              {(() => {
+                              {/* Organization - Unusual (for backward compatibility) */}
+                              {!nerData?.ORG && (() => {
                                 const orgEntities = nerData?.book_summary?.organization_entities_unusual;
                                 if (!orgEntities) return null;
                                 
@@ -3301,17 +3429,32 @@ export default function ProjectDetail() {
                               // Find the selected entity
                               let selectedEntity: EntityItem | null = null
                               
-                              if (category === 'person' && nameParts[0] === 'common') {
-                                selectedEntity = nerData.book_summary.person_entities_common.result.find(
+                              // Handle new format first
+                              if (category === 'person' && nerData?.PERSON) {
+                                selectedEntity = nerData.PERSON.find(
+                                  (e: EntityItem) => e.name === nameParts.join('-')
+                                ) || null
+                              } else if (category === 'location' && nerData?.LOC) {
+                                selectedEntity = nerData.LOC.find(
+                                  (e: EntityLocation) => e.name === nameParts.join('-')
+                                ) || null
+                              } else if (category === 'org' && nerData?.ORG) {
+                                selectedEntity = nerData.ORG.find(
+                                  (e: EntityOrganization) => e.name === nameParts.join('-')
+                                ) || null
+                              }
+                              // Handle backward compatibility with old format
+                              else if (category === 'person' && nameParts[0] === 'common') {
+                                selectedEntity = nerData?.book_summary?.person_entities_common?.result?.find(
                                   (e: EntityItem) => e.name === nameParts.slice(1).join('-')
                                 ) || null
                               } else if (category === 'person' && nameParts[0] === 'unusual') {
-                                selectedEntity = nerData.book_summary.person_entities_unusual["PDD Content"].find(
+                                selectedEntity = nerData?.book_summary?.person_entities_unusual?.["PDD Content"]?.find(
                                   (e: EntityItem) => e.name === nameParts.slice(1).join('-')
                                 ) || null
                               } else if (category === 'location' && nameParts[0] === 'common') {
                                 // Handle location_entities_common with flexible structure
-                                const locationEntities = nerData.book_summary.location_entities_common;
+                                const locationEntities = nerData?.book_summary?.location_entities_common;
                                 if (typeof locationEntities === 'object' && locationEntities !== null) {
                                   if (Array.isArray(locationEntities)) {
                                     selectedEntity = locationEntities.find(
@@ -3323,7 +3466,7 @@ export default function ProjectDetail() {
                                 }
                               } else if (category === 'location' && nameParts[0] === 'unusual') {
                                 // Handle location_entities_unusual with flexible structure
-                                const locationEntities = nerData.book_summary.location_entities_unusual;
+                                const locationEntities = nerData?.book_summary?.location_entities_unusual;
                                 if (typeof locationEntities === 'object' && locationEntities !== null) {
                                   if (Array.isArray(locationEntities)) {
                                     selectedEntity = locationEntities.find(
@@ -3335,7 +3478,7 @@ export default function ProjectDetail() {
                                 }
                               } else if (category === 'org' && nameParts[0] === 'common') {
                                 // Handle organization_entities_common with entities array
-                                const orgEntities = nerData.book_summary.organization_entities_common;
+                                const orgEntities = nerData?.book_summary?.organization_entities_common;
                                 if (orgEntities?.entities && Array.isArray(orgEntities.entities)) {
                                   selectedEntity = orgEntities.entities.find(
                                     (e: EntityItem) => e.name === nameParts.slice(1).join('-')
@@ -3343,7 +3486,7 @@ export default function ProjectDetail() {
                                 }
                               } else if (category === 'org' && nameParts[0] === 'unusual') {
                                 // Handle organization_entities_unusual with flexible structure
-                                const orgEntities = nerData.book_summary.organization_entities_unusual;
+                                const orgEntities = nerData?.book_summary?.organization_entities_unusual;
                                 if (typeof orgEntities === 'object' && orgEntities !== null) {
                                   if (Array.isArray(orgEntities)) {
                                     selectedEntity = orgEntities.find(
@@ -3366,7 +3509,7 @@ export default function ProjectDetail() {
                           </button>
                         </div>
                         
-                        {/* Display pronunciation details if an entity is selected - MOVED HERE */}
+                        {/* Display pronunciation details if an entity is selected */}
                         <div className="mt-4 p-3 bg-blue-50 rounded-md">
                           {selectedNameEntity ? (
                             (() => {
@@ -3376,17 +3519,32 @@ export default function ProjectDetail() {
                               // Find the selected entity
                               let selectedEntity: EntityItem | null = null
                               
-                              if (category === 'person' && nameParts[0] === 'common') {
-                                selectedEntity = nerData.book_summary.person_entities_common.result.find(
+                              // Handle new format first
+                              if (category === 'person' && nerData?.PERSON) {
+                                selectedEntity = nerData.PERSON.find(
+                                  (e: EntityItem) => e.name === nameParts.join('-')
+                                ) || null
+                              } else if (category === 'location' && nerData?.LOC) {
+                                selectedEntity = nerData.LOC.find(
+                                  (e: EntityLocation) => e.name === nameParts.join('-')
+                                ) || null
+                              } else if (category === 'org' && nerData?.ORG) {
+                                selectedEntity = nerData.ORG.find(
+                                  (e: EntityOrganization) => e.name === nameParts.join('-')
+                                ) || null
+                              }
+                              // Handle backward compatibility with old format
+                              else if (category === 'person' && nameParts[0] === 'common') {
+                                selectedEntity = nerData?.book_summary?.person_entities_common?.result?.find(
                                   (e: EntityItem) => e.name === nameParts.slice(1).join('-')
                                 ) || null
                               } else if (category === 'person' && nameParts[0] === 'unusual') {
-                                selectedEntity = nerData.book_summary.person_entities_unusual["PDD Content"].find(
+                                selectedEntity = nerData?.book_summary?.person_entities_unusual?.["PDD Content"]?.find(
                                   (e: EntityItem) => e.name === nameParts.slice(1).join('-')
                                 ) || null
                               } else if (category === 'location' && nameParts[0] === 'common') {
                                 // Handle location_entities_common with flexible structure
-                                const locationEntities = nerData.book_summary.location_entities_common;
+                                const locationEntities = nerData?.book_summary?.location_entities_common;
                                 if (typeof locationEntities === 'object' && locationEntities !== null) {
                                   if (Array.isArray(locationEntities)) {
                                     selectedEntity = locationEntities.find(
@@ -3398,7 +3556,7 @@ export default function ProjectDetail() {
                                 }
                               } else if (category === 'location' && nameParts[0] === 'unusual') {
                                 // Handle location_entities_unusual with flexible structure
-                                const locationEntities = nerData.book_summary.location_entities_unusual;
+                                const locationEntities = nerData?.book_summary?.location_entities_unusual;
                                 if (typeof locationEntities === 'object' && locationEntities !== null) {
                                   if (Array.isArray(locationEntities)) {
                                     selectedEntity = locationEntities.find(
@@ -3410,7 +3568,7 @@ export default function ProjectDetail() {
                                 }
                               } else if (category === 'org' && nameParts[0] === 'common') {
                                 // Handle organization_entities_common with entities array
-                                const orgEntities = nerData.book_summary.organization_entities_common;
+                                const orgEntities = nerData?.book_summary?.organization_entities_common;
                                 if (orgEntities?.entities && Array.isArray(orgEntities.entities)) {
                                   selectedEntity = orgEntities.entities.find(
                                     (e: EntityItem) => e.name === nameParts.slice(1).join('-')
@@ -3418,7 +3576,7 @@ export default function ProjectDetail() {
                                 }
                               } else if (category === 'org' && nameParts[0] === 'unusual') {
                                 // Handle organization_entities_unusual with flexible structure
-                                const orgEntities = nerData.book_summary.organization_entities_unusual;
+                                const orgEntities = nerData?.book_summary?.organization_entities_unusual;
                                 if (typeof orgEntities === 'object' && orgEntities !== null) {
                                   if (Array.isArray(orgEntities)) {
                                     selectedEntity = orgEntities.find(
