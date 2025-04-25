@@ -278,6 +278,17 @@ interface PronunciationCorrection {
 const diagnoseImageLoadingError = (error: Error | unknown, imageUrl: string, itemNumber: number) => {
   console.error(`Error loading image for item ${itemNumber}:`, error);
   
+  // Check if it's a 403 error (authorization issue)
+  const is403 = typeof imageUrl === 'string' && 
+    (imageUrl.toLowerCase().includes('status=403') || 
+     imageUrl.includes('403') ||
+     (error instanceof Error && error.message?.includes('403')));
+  
+  if (is403) {
+    console.warn(`Authorization error (403) for image ${itemNumber}. URL may have expired.`);
+    return 'Authorization error (403) - URL expired';
+  }
+  
   // Check if it's a timeout error
   const isTimeout = error instanceof Error && 
     (error.name === 'TimeoutError' || 
@@ -314,8 +325,9 @@ export default function ProjectDetail() {
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState<StoryboardItem[]>([])
-  // Add state for tracking the current mode
-  const [mode, setMode] = useState<"validation" | "production">("validation")
+  // Update mode state to include null for initial loading state
+  const [mode, setMode] = useState<"validation" | "production" | null>(null)
+  const [modeLoading, setModeLoading] = useState(true)
   const [selectedText, setSelectedText] = useState<string | null>(null)
   const [isTextDialogOpen, setIsTextDialogOpen] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -420,25 +432,52 @@ export default function ProjectDetail() {
   const [isProductionConfirmOpen, setIsProductionConfirmOpen] = useState(false);
   const [isActivatingProduction, setIsActivatingProduction] = useState(false);
 
+  // Add state for publishing form
+  const [publishFormData, setPublishFormData] = useState({
+    blurb: "",
+    book_url: "",
+    author_website: ""
+  });
+  const [isPublishing, setIsPublishing] = useState(false);
+
+  // Add a state to track previous storyboard status
+  const [previousStoryboardStatus, setPreviousStoryboardStatus] = useState<string | null>(null);
+
   // Log mode changes
   useEffect(() => {
-    console.log(`Mode changed to: ${mode}`)
+    if (mode !== null) {
+      console.log(`Mode changed to: ${mode}`)
+    }
   }, [mode])
 
-  // Set initial mode based on project metadata
+  // Set initial mode based on project metadata with protection against reverting from production
   useEffect(() => {
-    if (project?.current_mode) {
-      setMode(project.current_mode as "validation" | "production");
-    } else {
-      // Default to validation mode if no mode is set
-      setMode("validation");
+    if (project) {
+      setModeLoading(true);
+      // First check if we already have a mode set and it's production
+      const currentMode = mode;
+      
+      if (currentMode === "production") {
+        // If we're already in production mode, stay there regardless of what the database says
+        setModeLoading(false);
+        return;
+      }
+      
+      // Otherwise use the project's mode from database
+      if (project.current_mode) {
+        setMode(project.current_mode as "validation" | "production");
+      } else {
+        // Default to validation mode if no mode is set
+        setMode("validation");
+      }
+      setModeLoading(false);
     }
-  }, [project]);
+  }, [project, mode]);
 
   // Log mode changes and sync with database
   useEffect(() => {
     const syncModeWithDatabase = async () => {
-      if (!project) return;
+      if (!project || mode === null) return;
       
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -510,6 +549,12 @@ export default function ProjectDetail() {
         console.error('Error updating project mode:', updateError);
       }
       
+      // Update local project state to reflect the change
+      setProject({
+        ...project,
+        current_mode: "production"
+      });
+      
       // Update project status for storyboard processing
       await updateProjectStatus({
         userId: session.user.id,
@@ -557,8 +602,6 @@ export default function ProjectDetail() {
     } catch (error) {
       console.error('Error activating production mode:', error);
       toast.error('Failed to activate production mode');
-      // Reset mode to validation if there's an error
-      setMode("validation");
     } finally {
       setIsActivatingProduction(false);
     }
@@ -581,10 +624,13 @@ export default function ProjectDetail() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
       
+      console.log(`Fetching HLS path for mode: ${mode}`)
+      
       let storedPath = "";
       
       // In validation mode, get the path from the projects table
       if (mode === "validation") {
+        console.log("Fetching validation HLS path from projects table")
         const { data: projectData, error: projectError } = await supabase
           .from('projects')
           .select('validation_hls_path')
@@ -606,8 +652,10 @@ export default function ProjectDetail() {
         }
         
         storedPath = projectData.validation_hls_path;
+        console.log('Validation HLS path from DB:', storedPath)
       } else {
-        // In production mode, use the published_audiobooks table as before
+        // In production mode, use the published_audiobooks table
+        console.log("Fetching production HLS path from published_audiobooks table")
         const { data, error } = await supabase
           .from('published_audiobooks')
           .select('hls_path')
@@ -616,50 +664,38 @@ export default function ProjectDetail() {
           .maybeSingle()
         
         if (error) {
-          console.error('Error fetching HLS path:', error)
+          console.error('Error fetching production HLS path:', error)
           setHlsLoadError(`Could not retrieve streaming information: ${error.message}`)
           setIsPreparingHls(false);
           return
         }
         
         if (!data?.hls_path) {
-          setHlsLoadError('No streaming file found')
+          console.error('No production HLS path found in published_audiobooks table')
+          setHlsLoadError('No streaming file found in production data')
           setIsPreparingHls(false);
           return
         }
         
         storedPath = data.hls_path;
+        console.log('Production HLS path from DB:', storedPath)
       }
       
-      console.log('HLS path retrieved:', storedPath)
-      
-      // Determine HLS path based on mode
-      let hlsBasePath = "";
-      if (mode === "validation") {
-        hlsBasePath = `${session.user.id}/${project.id}/streaming`;
-      } else {
-        hlsBasePath = `streaming_assets/${session.user.id}/${project.id}`;
-      }
-      
-      // Check if the path matches our expected path for the current mode
-      const adjustedPath = storedPath.includes(hlsBasePath) ? 
-                          storedPath : 
-                          `${hlsBasePath}/${storedPath.split('/').pop()}`;
-      
-      console.log(`Using HLS path: ${adjustedPath}`);
+      // Use the stored path directly - no path manipulation needed
+      console.log(`Using HLS path directly from database: ${storedPath}`);
       
       // Reset error state
       setHlsLoadError(null)
       
       try {
-        // Use our new helper to get a playable HLS URL with signed URLs
+        // Use our helper to get a playable HLS URL with signed URLs
         console.log('Generating signed URLs for HLS path')
         
         // Clear any existing URL first
         setHlsPath(null);
         
-        // Generate the new stream URL
-        const streamUrl = await getHlsStreamUrl(adjustedPath)
+        // Generate the new stream URL using the stored path
+        const streamUrl = await getHlsStreamUrl(storedPath)
         console.log('HLS stream URL generated successfully')
         
         // Only set the URL after it's fully prepared
@@ -1334,19 +1370,39 @@ export default function ProjectDetail() {
             setProjectStatus(newStatus)
             setProcessingNewImageSet(new Set())
             
+            // Check if storyboard status has specifically changed TO "Storyboard Complete" from something else
+            const storyboardJustCompleted = 
+              newStatus.Storyboard_Status === "Storyboard Complete" && 
+              previousStoryboardStatus !== "Storyboard Complete";
+            
+            // Store current storyboard status for next comparison
+            setPreviousStoryboardStatus(newStatus.Storyboard_Status);
+            
             // Check if we should attempt to fetch project data
             const now = Date.now();
             const canAttemptFetch = r2ServiceState.available || 
                                   (now - r2ServiceState.lastAttemptTime > r2ServiceState.backoffDelay);
             
             if (canAttemptFetch) {
-              await fetchProject()
+              // If storyboard just completed, add a delay to ensure all files are ready
+              if (storyboardJustCompleted) {
+                console.log('Storyboard just completed - waiting for all files to be ready before refreshing');
+                // Wait 3 seconds before fetching to allow for backend processing to complete
+                setTimeout(async () => {
+                  await fetchProject();
+                  console.log('Refreshed files after storyboard completion');
+                }, 3000);
+              } else {
+                await fetchProject();
+              }
             } else {
               console.log(`Skipping fetchProject after status change - R2 unavailable, next attempt in ${Math.ceil((r2ServiceState.lastAttemptTime + r2ServiceState.backoffDelay - now) / 1000)}s`);
             }
           } else {
             // Status hasn't changed, just update the status
             setProjectStatus(newStatus)
+            // Store current storyboard status for next comparison
+            setPreviousStoryboardStatus(newStatus.Storyboard_Status);
           }
         }
       } catch (error) {
@@ -1361,7 +1417,7 @@ export default function ProjectDetail() {
         clearInterval(pollingInterval)
       }
     }
-  }, [project, projectStatus, fetchProject, r2ServiceState]);
+  }, [project, projectStatus, fetchProject, r2ServiceState, previousStoryboardStatus]);
 
   // Add a useEffect to monitor project status changes
   useEffect(() => {
@@ -2482,10 +2538,45 @@ export default function ProjectDetail() {
   useEffect(() => {
     // Only fetch HLS path when the project is published
     if (projectStatus?.Audiobook_Status === "Audiobook Complete") {
+      // In production mode, we need to ensure the published_audiobooks table entry exists
+      if (mode === "production") {
+        console.log("Production mode detected, fetching HLS path with retry enabled")
+      }
       fetchHlsPath()
     }
-  }, [projectStatus, project, fetchHlsPath])
+  }, [projectStatus, project, fetchHlsPath, mode])
   
+  // Add effect to limit retries when no HLS path is found
+  useEffect(() => {
+    if (hlsLoadError && hlsLoadError.includes('No production HLS path found') && mode === "production") {
+      // Use a ref to track retries
+      const retryCount = 3;
+      const retryDelay = 5000; // 5 seconds between retries
+      
+      console.log(`Will retry fetching production HLS path ${retryCount} times with ${retryDelay/1000}s delay`);
+      
+      // Set up retry timer with cleanup
+      let retryAttempt = 0;
+      const retryTimer = setInterval(() => {
+        retryAttempt++;
+        console.log(`Retry attempt ${retryAttempt} of ${retryCount} for production HLS path`);
+        
+        if (retryAttempt >= retryCount) {
+          console.log('Maximum retry attempts reached');
+          clearInterval(retryTimer);
+          return;
+        }
+        
+        fetchHlsPath();
+      }, retryDelay);
+      
+      // Clean up on unmount or when error is cleared
+      return () => {
+        clearInterval(retryTimer);
+      };
+    }
+  }, [hlsLoadError, mode, fetchHlsPath]);
+
   // Add cleanup for blob URLs when component unmounts
   useEffect(() => {
     // Cleanup function
@@ -2536,7 +2627,7 @@ export default function ProjectDetail() {
       console.log('Using HLS.js');
       
       try {
-        // Create a new HLS instance with Cloudflare-recommended settings
+        // Create a new HLS instance with improved settings
         hls = new Hls({ 
           enableWorker: true,
           // Progressive loading is important for large streams
@@ -2547,9 +2638,17 @@ export default function ProjectDetail() {
           maxMaxBufferLength: 120,
           // Use reliable timeouts
           manifestLoadingTimeOut: 20000,
-          manifestLoadingMaxRetry: 4,
+          // Remove the first occurrence of manifestLoadingMaxRetry
           levelLoadingTimeOut: 20000,
           fragLoadingTimeOut: 20000,
+          // Limit retries to prevent hammering the server
+          manifestLoadingMaxRetry: 3,
+          levelLoadingMaxRetry: 3,
+          fragLoadingMaxRetry: 3,
+          // Add retry delays to prevent rapid retries
+          manifestLoadingRetryDelay: 1000,
+          levelLoadingRetryDelay: 1000,
+          fragLoadingRetryDelay: 1000,
           // Debug only in development
           debug: process.env.NODE_ENV === 'development',
           // Use max quality by default
@@ -2562,9 +2661,25 @@ export default function ProjectDetail() {
           }
         });
         
+        // Limit errors by implementing more restrictive error handling with backoff
+        let errorCount = 0;
+        const maxErrors = 5;
+        
         // Add more detailed error handling
         hls.on(Hls.Events.ERROR, (event, data) => {
           console.warn('HLS error:', data);
+          
+          errorCount++;
+          
+          if (errorCount > maxErrors) {
+            console.error(`Too many errors (${errorCount}), stopping HLS.js`);
+            setHlsLoadError('Too many errors occurred. Please refresh the page to try again.');
+            if (hls) {
+              hls.destroy();
+              hls = null;
+            }
+            return;
+          }
           
           if (data.fatal) {
             console.error('Fatal HLS error:', data.type, data.details);
@@ -2606,6 +2721,8 @@ export default function ProjectDetail() {
         // Add logging for debugging
         hls.on(Hls.Events.MANIFEST_LOADED, () => {
           console.log('HLS manifest loaded successfully');
+          // Reset error count on successful load
+          errorCount = 0;
         });
         
         // First attach the media
@@ -2693,6 +2810,77 @@ export default function ProjectDetail() {
         }
       })
 
+      // In production mode, create/update an entry in the published_audiobooks table
+      if (mode === "production") {
+        console.log("Creating/updating published_audiobooks entry for production mode")
+        
+        // Generate the HLS path using the correct format for production
+        const hlsPathForProduction = `streaming_assets/${session.user.id}/${project.id}/playlist.m3u8`
+        
+        // First check if an entry already exists
+        const { data: existingEntry, error: checkError } = await supabase
+          .from('published_audiobooks')
+          .select('id')
+          .eq('userid', session.user.id)
+          .eq('projectid', project.id)
+          .maybeSingle()
+          
+        if (checkError) {
+          console.error("Error checking for existing published_audiobooks entry:", checkError)
+          // Continue with the process even if there's an error checking
+        }
+        
+        if (existingEntry?.id) {
+          // Update existing entry
+          console.log("Updating existing published_audiobooks entry")
+          const { error: updateError } = await supabase
+            .from('published_audiobooks')
+            .update({
+              hls_path: hlsPathForProduction,
+              book_title: project.book_title,
+              author_name: project.author_name,
+              cover_file_path: project.cover_file_path,
+              voice_name: project.voice_name,
+              voice_id: project.voice_id,
+              publish_status: false,
+              // Don't update blurb, book_url, author_website if they exist
+            })
+            .eq('id', existingEntry.id)
+            
+          if (updateError) {
+            console.error("Error updating published_audiobooks entry:", updateError)
+            // Continue with process even if update fails
+          } else {
+            console.log("Successfully updated published_audiobooks entry")
+          }
+        } else {
+          // Create new entry
+          console.log("Creating new published_audiobooks entry")
+          const { error: insertError } = await supabase
+            .from('published_audiobooks')
+            .insert({
+              userid: session.user.id,
+              projectid: project.id,
+              hls_path: hlsPathForProduction,
+              book_title: project.book_title,
+              author_name: project.author_name,
+              cover_file_path: project.cover_file_path,
+              voice_name: project.voice_name,
+              voice_id: project.voice_id,
+              publish_status: false,
+              // Initialize these as NULL by not including them
+              // blurb, book_url, author_website will be added later through the form
+            })
+            
+          if (insertError) {
+            console.error("Error creating published_audiobooks entry:", insertError)
+            // Continue with process even if insert fails
+          } else {
+            console.log("Successfully created published_audiobooks entry with hls_path:", hlsPathForProduction)
+          }
+        }
+      }
+
       await fetchProject()
 
       // Use the author_name and book_title from the project
@@ -2755,8 +2943,111 @@ export default function ProjectDetail() {
     };
   }, [hlsVideoRef]);
 
+  // Add a function to update streaming URLs when component mounts
+  useEffect(() => {
+    // Remove excessive debug logging
+  }, [voices, selectedVoice])
+
+  // Handle publishing form submission
+  const handlePublishingFormSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    
+    if (!project) return;
+    
+    setIsPublishing(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('No session');
+      
+      // Get the HLS path from the appropriate source
+      let hls_path = "";
+      
+      if (mode === "production") {
+        // Get the HLS path from storage if available
+        const { data } = await supabase
+          .from('published_audiobooks')
+          .select('hls_path')
+          .eq('userid', session.user.id)
+          .eq('projectid', project.id)
+          .maybeSingle();
+        
+        hls_path = data?.hls_path || "";
+      }
+      
+      // If we don't have an HLS path, try to get it from project data
+      if (!hls_path) {
+        const { data: projectData } = await supabase
+          .from('projects')
+          .select('validation_hls_path')
+          .eq('id', project.id)
+          .eq('user_id', session.user.id)
+          .single();
+        
+        hls_path = projectData?.validation_hls_path || "";
+      }
+      
+      // Check if the audiobook already exists in the table
+      const { data } = await supabase
+        .from('published_audiobooks')
+        .select('id')
+        .eq('userid', session.user.id)
+        .eq('projectid', project.id)
+        .maybeSingle();
+      
+      if (data?.id) {
+        // Update existing record
+        const { error } = await supabase
+          .from('published_audiobooks')
+          .update({
+            blurb: publishFormData.blurb,
+            book_url: publishFormData.book_url,
+            author_website: publishFormData.author_website,
+            hls_path: hls_path,
+            book_title: project.book_title,
+            author_name: project.author_name,
+            cover_file_path: project.cover_file_path,
+            voice_name: project.voice_name,
+            voice_id: project.voice_id,
+            publish_status: false
+          })
+          .eq('id', data.id);
+        
+        if (error) throw error;
+      } else {
+        // Insert new record
+        const { error } = await supabase
+          .from('published_audiobooks')
+          .insert({
+            userid: session.user.id,
+            projectid: project.id,
+            blurb: publishFormData.blurb,
+            book_url: publishFormData.book_url,
+            author_website: publishFormData.author_website,
+            hls_path: hls_path,
+            book_title: project.book_title,
+            author_name: project.author_name,
+            cover_file_path: project.cover_file_path,
+            voice_name: project.voice_name,
+            voice_id: project.voice_id,
+            publish_status: false
+          });
+        
+        if (error) throw error;
+      }
+      
+      toast.success('Publishing information saved successfully');
+    } catch (error) {
+      console.error('Error saving publishing information:', error);
+      toast.error('Failed to save publishing information');
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
+  // Show loading indicator if mode is still being determined
+  if (modeLoading) return <div>Loading project settings...</div>
 
   return (
     <div className="container mx-auto px-4 py-4">
@@ -3858,7 +4149,7 @@ export default function ProjectDetail() {
                                 {item.image?.loadError ? (
                                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-100">
                                     <p className="text-red-500 mb-2">Error: {diagnoseImageLoadingError(null, item.image?.url || '', item.number)}</p>
-                                    <p className="text-xs text-gray-500 mb-2">The image might be too large or corrupted</p>
+                                    <p className="text-xs text-gray-500 mb-2">The image might be temporarily unavailable</p>
                                     <Button 
                                       variant="outline" 
                                       onClick={() => {
@@ -3868,6 +4159,13 @@ export default function ProjectDetail() {
                                         if (itemIndex !== -1 && updatedItems[itemIndex].image) {
                                           updatedItems[itemIndex].image!.loadError = false;
                                           setItems(updatedItems);
+                                          
+                                          // If the error was a 403, try to get fresh URLs and refetch the project
+                                          const errorMessage = diagnoseImageLoadingError(null, item.image?.url || '', item.number);
+                                          if (errorMessage.includes('403') || errorMessage.includes('expired')) {
+                                            console.log(`Attempting to refresh URLs for item ${item.number} due to authorization error`);
+                                            fetchProject();
+                                          }
                                         }
                                       }}
                                       size="sm"
@@ -3886,8 +4184,10 @@ export default function ProjectDetail() {
                                   priority={item.number <= 2}
                                   sizes="(max-width: 768px) 100vw, 341px"
                                   onError={(e) => {
-                                    // Get error message but don't assign to variable since we use it directly
-                                    diagnoseImageLoadingError(e, item.image?.url || '', item.number);
+                                    // Get error details
+                                    const target = e.target as HTMLImageElement;
+                                    const errorMsg = diagnoseImageLoadingError(e, target.src, item.number);
+                                    console.warn(`Image error for item ${item.number}: ${errorMsg}`);
                                     
                                     // Mark this item as having a load error
                                     const updatedItems = [...items];
@@ -3897,13 +4197,21 @@ export default function ProjectDetail() {
                                       setItems(updatedItems);
                                     }
 
-                                    // Try to reload the image by updating its URL with a cache-busting query param
-                                    const target = e.target as HTMLImageElement;
-                                    if (target && target.src) {
-                                      const newSrc = target.src.includes('?') 
-                                        ? `${target.src}&retry=${Date.now()}` 
-                                        : `${target.src}?retry=${Date.now()}`;
-                                      target.src = newSrc;
+                                    // For 403 errors specifically, try to refresh all URLs immediately
+                                    if (errorMsg.includes('403') || errorMsg.includes('expired')) {
+                                      // Add a slight delay to avoid too many simultaneous requests
+                                      setTimeout(() => {
+                                        console.log(`Authorization error for item ${item.number}, refreshing all URLs`);
+                                        fetchProject();
+                                      }, 500);
+                                    } else {
+                                      // For other errors, try a cache-busting reload
+                                      if (target && target.src) {
+                                        const newSrc = target.src.includes('?') 
+                                          ? `${target.src}&retry=${Date.now()}` 
+                                          : `${target.src}?retry=${Date.now()}`;
+                                        target.src = newSrc;
+                                      }
                                     }
                                   }}
                                 />
@@ -4415,6 +4723,63 @@ export default function ProjectDetail() {
                         </div>
                       </CardContent>
                     </Card>
+                    
+                    {/* Publishing form - only shown in production mode */}
+                    {mode === "production" && (
+                      <Card className="flex-shrink-0 w-[400px]">
+                        <CardContent className="p-4 space-y-4">
+                          <h3 className="text-lg font-semibold">Publishing Information</h3>
+                          <p className="text-sm text-gray-600">
+                            Add details about your audiobook to prepare it for publishing.
+                          </p>
+                          
+                          <form onSubmit={handlePublishingFormSubmit} className="space-y-4">
+                            <div>
+                              <label className="block text-sm font-medium mb-1">Audiobook Blurb</label>
+                              <Textarea 
+                                placeholder="Enter a description of your audiobook"
+                                value={publishFormData.blurb}
+                                onChange={(e) => setPublishFormData({...publishFormData, blurb: e.target.value})}
+                                className="min-h-[100px]"
+                              />
+                            </div>
+                            
+                            <div>
+                              <label className="block text-sm font-medium mb-1">Ebook/Print Purchase URL</label>
+                              <Input 
+                                placeholder="https://example.com/your-book"
+                                value={publishFormData.book_url}
+                                onChange={(e) => setPublishFormData({...publishFormData, book_url: e.target.value})}
+                              />
+                            </div>
+                            
+                            <div>
+                              <label className="block text-sm font-medium mb-1">Author Website URL</label>
+                              <Input 
+                                placeholder="https://example.com"
+                                value={publishFormData.author_website}
+                                onChange={(e) => setPublishFormData({...publishFormData, author_website: e.target.value})}
+                              />
+                            </div>
+                            
+                            <Button 
+                              type="submit" 
+                              className="w-full"
+                              disabled={isPublishing}
+                            >
+                              {isPublishing ? (
+                                <>
+                                  <span className="mr-2">Saving...</span>
+                                  <div className="animate-spin h-4 w-4 border-2 border-white rounded-full border-t-transparent"></div>
+                                </>
+                              ) : (
+                                "Save Publishing Information"
+                              )}
+                            </Button>
+                          </form>
+                        </CardContent>
+                      </Card>
+                    )}
                   </div>
                 </div>
               ) : (
