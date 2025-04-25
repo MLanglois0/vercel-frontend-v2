@@ -835,10 +835,6 @@ export default function ProjectDetail() {
       return
     }
     
-    // Set flag to update dictionary when generating storyboard
-    // This ensures dictionary updates happen only when explicitly requested
-    setShouldUpdateDictionary(true)
-    
     // Show the confirmation dialog
     setIsStoryboardConfirmOpen(true)
   }
