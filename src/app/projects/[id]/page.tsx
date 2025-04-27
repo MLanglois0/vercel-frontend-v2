@@ -4318,20 +4318,6 @@ export default function ProjectDetail() {
                                   remountKey={audioRemountKeys[item.number]}
                                 />
                                 
-                                {/* Always show Track 1 button */}
-                                <Button
-                                  variant="outline"
-                                  onClick={() => handleTrackSelection(1, item)}
-                                  disabled={processingNewAudio.has(item.number)}
-                                  className="flex-none text-xs -mt-3 relative"
-                                  style={{ width: '90px', height: '70px' }}
-                                >
-                                  <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
-                                    primaryTrack === 1 ? 'bg-green-500' : 'bg-gray-300'
-                                  }`} />
-                                  Track 1
-                                </Button>
-                                
                                 {hasTrack2.has(item.number) ? (
                                   <Button
                                     variant="outline"
@@ -4363,6 +4349,20 @@ export default function ProjectDetail() {
                                     )}
                                   </Button>
                                 )}
+                                
+                                {/* Always show Track 1 button */}
+                                <Button
+                                  variant="outline"
+                                  onClick={() => handleTrackSelection(1, item)}
+                                  disabled={processingNewAudio.has(item.number)}
+                                  className="flex-none text-xs -mt-3 relative"
+                                  style={{ width: '90px', height: '70px' }}
+                                >
+                                  <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
+                                    primaryTrack === 1 ? 'bg-green-500' : 'bg-gray-300'
+                                  }`} />
+                                  Track 1
+                                </Button>
                               </div>
                             ) : (
                               <div className="h-[70px] flex items-center justify-center">
