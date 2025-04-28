@@ -351,6 +351,7 @@ export default function ProjectDetail() {
   const [isReplaceImagesInProgress, setIsReplaceImagesInProgress] = useState(false)
   const [confirmReplaceItem, setConfirmReplaceItem] = useState<StoryboardItem | null>(null)
   const [processingNewAudio, setProcessingNewAudio] = useState<Set<number>>(new Set())
+  const [confirmNewAudioItem, setConfirmNewAudioItem] = useState<StoryboardItem | null>(null)
   // Add a state to track audio remount keys
   const [audioRemountKeys, setAudioRemountKeys] = useState<Record<number, number>>({});
   
@@ -1821,36 +1822,15 @@ export default function ProjectDetail() {
     
     const isRestoreAction = checkForJpgoldset(item.number)
     
-    // If this is a replace action (not restore), check if we should show confirmation
+    // If this is a replace action (not restore), always show confirmation
     if (!isRestoreAction) {
-      // Check for the cookie
-      const skipReplaceConfirmation = document.cookie
-        .split('; ')
-        .find(row => row.startsWith('skipReplaceConfirmation='))
-        ?.split('=')[1];
-      
-      if (skipReplaceConfirmation === 'true') {
-        // Skip confirmation and proceed directly
-        await processImageAction(item);
-      } else {
-        // Show confirmation dialog
-        setConfirmReplaceItem(item);
-      }
+      // Show confirmation dialog
+      setConfirmReplaceItem(item);
       return;
     }
     
     // Otherwise, proceed with the restore action
     await processImageAction(item);
-  }
-  
-  // Function to save the preference to a cookie
-  const savePreferenceToCookie = () => {
-    // Set cookie to expire in 1 year
-    const expiryDate = new Date();
-    expiryDate.setFullYear(expiryDate.getFullYear() + 1);
-    
-    document.cookie = `skipReplaceConfirmation=true; expires=${expiryDate.toUTCString()}; path=/`;
-    console.log('Saved preference to cookie');
   }
   
   // New function to handle the actual image processing with better cleanup
@@ -1893,8 +1873,66 @@ export default function ProjectDetail() {
           imagePath: item.image.path
         })
 
-        // Trigger storyboard generation
-        await handleGenerateStoryboard()
+        // Instead of triggering storyboard generation which shows a confirmation dialog,
+        // directly call the code needed to regenerate the images
+        try {
+          const { data: { session } } = await supabase.auth.getSession()
+          if (!session) throw new Error('No session')
+          if (!project) throw new Error('No project')
+          if (!project.voice_id) throw new Error('Voice not selected')
+          
+          // Set flag to update dictionary when generating storyboard
+          setShouldUpdateDictionary(true)
+          
+          // Extract filename from epub_file_path
+          const epubFilename = project.epub_file_path.split('/').pop()
+          if (!epubFilename) throw new Error('EPUB filename not found')
+
+          await updateProjectStatus({
+            userId: session.user.id,
+            projectId: project.id,
+            status: {
+              Project: project.project_name,
+              Book: project.book_title,
+              notify: session.user.email || '',
+              userid: session.user.id,
+              projectid: project.id,
+              Current_Status: "Storyboard is Processing",
+              Ebook_Prep_Status: "Ebook Processing Complete",
+              Storyboard_Status: "Processing Storyboard, Please Wait",
+              Proof_Status: "Waiting for Storyboard Completion",
+              Audiobook_Status: "Not Started"
+            }
+          })
+
+          // Use the author_name and book_title from the project
+          const authorName = project.author_name || "Mike Langlois";
+          const bookTitle = project.book_title || "Walker";
+          
+          // Use the voice name from the project
+          const voiceName = project.voice_name || "Abe";
+          
+          // Set the dictionary parameter to use the master dictionary
+          let dictionaryParam = ""
+          if (project.pls_dict_name) {
+            dictionaryParam = ` -pd "${masterDictionaryName}"`
+          }
+          
+          // Set mode-specific parameters
+          const modeParam = mode === "validation" ? "validation" : "production"
+          
+          // Add the -l parameter with appropriate value based on mode
+          const limitParam = mode === "validation" ? " -l 2" : " -l 5"
+          
+          const command = `python3 b2vp* -f "${epubFilename}" -uid ${session.user.id} -pid ${project.id} -a "${authorName}" -ti "${bookTitle}" -vn "${voiceName}"${dictionaryParam}${limitParam} -ss -m ${modeParam}`
+          await sendCommand(command)
+          
+          toast.success('Generating new images. This may take a few minutes.')
+        } catch (error) {
+          console.error('Error generating storyboard:', error)
+          toast.error('Failed to generate new images')
+          throw error // Rethrow to be caught by the outer catch block
+        }
 
         // Add a delay before starting to check for completion
         let checkInterval: NodeJS.Timeout | null = null;
@@ -4081,7 +4119,7 @@ export default function ProjectDetail() {
                 <div className="flex items-center justify-center min-h-[200px]">
                   <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent"></div>
                 </div>
-              ) : projectStatus?.Storyboard_Status !== "Storyboard Complete" ? (
+              ) : projectStatus?.Storyboard_Status !== "Storyboard Complete" && processingNewAudio.size === 0 && processingNewImageSet.size === 0 && !isReplaceImagesInProgress ? (
                 <Card className="p-8 text-center">
                   <p className="text-muted-foreground">No storyboard available yet.</p>
                   {projectStatus?.Storyboard_Status === "Processing Storyboard, Please Wait" && (
@@ -4090,275 +4128,321 @@ export default function ProjectDetail() {
                     </div>
                   )}
                 </Card>
-              ) : items.length > 0 ? (
-                <div className="relative">
-                  <div
-                    ref={scrollContainerRef}
-                    className="flex gap-4 overflow-x-auto pb-4 scroll-smooth"
-                  >
-                    {items
-                      .filter(item => item.image?.url || item.audio?.url) // Only show items with image or audio
-                      .map((item) => (
-                      <Card key={item.number} className="flex-shrink-0 w-[341px]">
-                        <CardContent className="p-2 space-y-2">
-                          <div className="relative">
-                            {processingItems.has(item.number) ? (
-                              <div className="relative w-full h-[597px] bg-gray-100 flex items-center justify-center">
-                                <div className="flex flex-col items-center gap-4">
-                                  <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent"></div>
-                                  <p className="text-lg font-medium text-gray-600">Processing...</p>
-                                </div>
-                              </div>
-                            ) : item.image?.url ? (
-                              <div className="relative w-full h-[597px]">
-                                {item.image?.loadError ? (
-                                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-100">
-                                    <p className="text-red-500 mb-2">Error: {diagnoseImageLoadingError(null, item.image?.url || '', item.number)}</p>
-                                    <p className="text-xs text-gray-500 mb-2">The image might be temporarily unavailable</p>
-                                    <Button 
-                                      variant="outline" 
-                                      onClick={() => {
-                                        // Clear the error flag and force a re-render
+              ) : (
+                (() => {
+                  // Filter items that have either an image or audio
+                  const visibleItems = items.filter(item => item.image?.url || item.audio?.url);
+                  
+                  return visibleItems.length > 0 ? (
+                    <div className="relative">
+                      <div
+                        ref={scrollContainerRef}
+                        className="flex gap-4 overflow-x-auto pb-4 scroll-smooth"
+                      >
+                        {visibleItems.map((item) => (
+                          <Card key={item.number} className="flex-shrink-0 w-[341px]">
+                            <CardContent className="p-2 space-y-2">
+                              <div className="relative">
+                                {processingItems.has(item.number) ? (
+                                  <div className="relative w-full h-[597px] bg-gray-100 flex items-center justify-center">
+                                    <div className="flex flex-col items-center gap-4">
+                                      <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent"></div>
+                                      <p className="text-lg font-medium text-gray-600">Processing...</p>
+                                    </div>
+                                  </div>
+                                ) : processingNewImageSet.has(item.number) ? (
+                                  <div className="relative w-full h-[597px] bg-gray-100 flex items-center justify-center">
+                                    <div className="flex flex-col items-center gap-4">
+                                      <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent"></div>
+                                      <p className="text-lg font-medium text-gray-600">Generating New Images...</p>
+                                    </div>
+                                  </div>
+                                ) : item.image?.url ? (
+                                  <div className="relative w-full h-[597px]">
+                                    {item.image?.loadError ? (
+                                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-100">
+                                        <p className="text-red-500 mb-2">Error: {diagnoseImageLoadingError(null, item.image?.url || '', item.number)}</p>
+                                        <p className="text-xs text-gray-500 mb-2">The image might be temporarily unavailable</p>
+                                        <Button 
+                                          variant="outline" 
+                                          onClick={() => {
+                                            // Clear the error flag and force a re-render
+                                            const updatedItems = [...items];
+                                            const itemIndex = updatedItems.findIndex(i => i.number === item.number);
+                                            if (itemIndex !== -1 && updatedItems[itemIndex].image) {
+                                              updatedItems[itemIndex].image!.loadError = false;
+                                              setItems(updatedItems);
+                                              
+                                              // If the error was a 403, try to get fresh URLs and refetch the project
+                                              const errorMessage = diagnoseImageLoadingError(null, item.image?.url || '', item.number);
+                                              if (errorMessage.includes('403') || errorMessage.includes('expired')) {
+                                                console.log(`Attempting to refresh URLs for item ${item.number} due to authorization error`);
+                                                fetchProject();
+                                              }
+                                            }
+                                          }}
+                                          size="sm"
+                                        >
+                                          Retry
+                                        </Button>
+                                      </div>
+                                    ) : null}
+                                    <Image 
+                                      src={item.image.url} 
+                                      alt={`Storyboard ${item.number}`}
+                                      fill
+                                      className={`object-cover rounded ${
+                                        item.image.path && swappingImages.has(item.image.path) ? 'opacity-50' : ''
+                                      }${item.image.loadError ? ' hidden' : ''}`}
+                                      priority={item.number <= 2}
+                                      sizes="(max-width: 768px) 100vw, 341px"
+                                      onError={(e) => {
+                                        // Get error details
+                                        const target = e.target as HTMLImageElement;
+                                        const errorMsg = diagnoseImageLoadingError(e, target.src, item.number);
+                                        console.warn(`Image error for item ${item.number}: ${errorMsg}`);
+                                        
+                                        // Mark this item as having a load error
                                         const updatedItems = [...items];
                                         const itemIndex = updatedItems.findIndex(i => i.number === item.number);
                                         if (itemIndex !== -1 && updatedItems[itemIndex].image) {
-                                          updatedItems[itemIndex].image!.loadError = false;
+                                          updatedItems[itemIndex].image!.loadError = true;
                                           setItems(updatedItems);
-                                          
-                                          // If the error was a 403, try to get fresh URLs and refetch the project
-                                          const errorMessage = diagnoseImageLoadingError(null, item.image?.url || '', item.number);
-                                          if (errorMessage.includes('403') || errorMessage.includes('expired')) {
-                                            console.log(`Attempting to refresh URLs for item ${item.number} due to authorization error`);
+                                        }
+
+                                        // For 403 errors specifically, try to refresh all URLs immediately
+                                        if (errorMsg.includes('403') || errorMsg.includes('expired')) {
+                                          // Add a slight delay to avoid too many simultaneous requests
+                                          setTimeout(() => {
+                                            console.log(`Authorization error for item ${item.number}, refreshing all URLs`);
                                             fetchProject();
+                                          }, 500);
+                                        } else {
+                                          // For other errors, try a cache-busting reload
+                                          if (target && target.src) {
+                                            const newSrc = target.src.includes('?') 
+                                              ? `${target.src}&retry=${Date.now()}` 
+                                              : `${target.src}?retry=${Date.now()}`;
+                                            target.src = newSrc;
                                           }
                                         }
                                       }}
+                                    />
+                                    {item.image.path && swappingImages.has(item.image.path) && (
+                                      <div className="absolute inset-0 flex items-center justify-center">
+                                        <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent" />
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="relative w-full h-[597px] bg-gray-100 flex items-center justify-center">
+                                    <p className="text-gray-500">No image available</p>
+                                  </div>
+                                )}
+                                <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded">
+                                  {item.number}
+                                </div>
+                              </div>
+                              
+                              <div className="flex gap-2 items-center mt-2">
+                                <div className="flex flex-col gap-2 flex-1">
+                                  {item.text?.content && (
+                                    <Button
+                                      variant="outline"
+                                      onClick={() => {
+                                        setSelectedText(item.text?.content || null)
+                                        setIsTextDialogOpen(true)
+                                      }}
+                                      className="flex items-center gap-2 text-sm w-full justify-center"
                                       size="sm"
                                     >
-                                      Retry
+                                      <FileText className="h-4 w-4" />
+                                      View Text
                                     </Button>
-                                  </div>
-                                ) : null}
-                                <Image 
-                                  src={item.image.url} 
-                                  alt={`Storyboard ${item.number}`}
-                                  fill
-                                  className={`object-cover rounded ${
-                                    item.image.path && swappingImages.has(item.image.path) ? 'opacity-50' : ''
-                                  }${item.image.loadError ? ' hidden' : ''}`}
-                                  priority={item.number <= 2}
-                                  sizes="(max-width: 768px) 100vw, 341px"
-                                  onError={(e) => {
-                                    // Get error details
-                                    const target = e.target as HTMLImageElement;
-                                    const errorMsg = diagnoseImageLoadingError(e, target.src, item.number);
-                                    console.warn(`Image error for item ${item.number}: ${errorMsg}`);
-                                    
-                                    // Mark this item as having a load error
-                                    const updatedItems = [...items];
-                                    const itemIndex = updatedItems.findIndex(i => i.number === item.number);
-                                    if (itemIndex !== -1 && updatedItems[itemIndex].image) {
-                                      updatedItems[itemIndex].image!.loadError = true;
-                                      setItems(updatedItems);
-                                    }
-
-                                    // For 403 errors specifically, try to refresh all URLs immediately
-                                    if (errorMsg.includes('403') || errorMsg.includes('expired')) {
-                                      // Add a slight delay to avoid too many simultaneous requests
-                                      setTimeout(() => {
-                                        console.log(`Authorization error for item ${item.number}, refreshing all URLs`);
-                                        fetchProject();
-                                      }, 500);
-                                    } else {
-                                      // For other errors, try a cache-busting reload
-                                      if (target && target.src) {
-                                        const newSrc = target.src.includes('?') 
-                                          ? `${target.src}&retry=${Date.now()}` 
-                                          : `${target.src}?retry=${Date.now()}`;
-                                        target.src = newSrc;
-                                      }
-                                    }
-                                  }}
-                                />
-                                {item.image.path && swappingImages.has(item.image.path) && (
-                                  <div className="absolute inset-0 flex items-center justify-center">
-                                    <div className="animate-spin h-8 w-8 border-4 border-primary rounded-full border-t-transparent" />
-                                  </div>
-                                )}
-                              </div>
-                            ) : (
-                              <div className="relative w-full h-[597px] bg-gray-100 flex items-center justify-center">
-                                <p className="text-gray-500">No image available</p>
-                              </div>
-                            )}
-                            <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded">
-                              {item.number}
-                            </div>
-                          </div>
-                          
-                          <div className="flex gap-2 items-center mt-2">
-                            <div className="flex flex-col gap-2 flex-1">
-                              {item.text?.content && (
-                                <Button
-                                  variant="outline"
-                                  onClick={() => {
-                                    setSelectedText(item.text?.content || null)
-                                    setIsTextDialogOpen(true)
-                                  }}
-                                  className="flex items-center gap-2 text-sm w-full justify-center"
-                                  size="sm"
-                                >
-                                  <FileText className="h-4 w-4" />
-                                  View Text
-                                </Button>
-                              )}
-                              <Button 
-                                variant="outline" 
-                                onClick={() => handleNewImageSet(item)}
-                                disabled={
-                                  processingNewImageSet.has(item.number) || 
-                                  (isReplaceImagesInProgress && checkForJpgoldset(item.number) === false)
-                                }
-                                className="whitespace-nowrap text-sm w-full justify-center"
-                                size="sm"
-                              >
-                                {getButtonText(item)}
-                              </Button>
-                            </div>
-                            <div className="flex gap-1 justify-end">
-                              {item.image?.savedVersions?.map((version, idx) => (
-                                <div 
-                                  key={`${version.path}-${idx}`}
-                                  className="relative w-[48px] h-[85px] cursor-pointer hover:opacity-80 transition-opacity"
-                                  onClick={async () => {
-                                    if (swappingImages.has(version.path)) return
-                                    try {
-                                      setSwappingImages(prev => new Set([...prev, version.path, item.image!.path]))
-                                      await swapStoryboardImage({
-                                        originalPath: item.image!.path,
-                                        thumbnailPath: version.path
-                                      })
-                                      await fetchProject()
-                                    } catch (error) {
-                                      console.error('Error swapping images:', error)
-                                      toast.error(getUserFriendlyError(error))
-                                    } finally {
-                                      setSwappingImages(prev => {
-                                        const next = new Set(prev)
-                                        next.delete(version.path)
-                                        next.delete(item.image!.path)
-                                        return next
-                                      })
-                                    }
-                                  }}
-                                >
-                                  <Image 
-                                    src={version.url}
-                                    alt={`Version ${idx + 1}`}
-                                    fill
-                                    className={`object-cover rounded-sm border border-gray-200 ${
-                                      swappingImages.has(version.path) ? 'opacity-50' : ''
-                                    }`}
-                                    sizes="48px"
-                                  />
-                                  {swappingImages.has(version.path) && (
-                                    <div className="absolute inset-0 flex items-center justify-center">
-                                      <div className="animate-spin h-4 w-4 border-2 border-primary rounded-full border-t-transparent" />
-                                    </div>
                                   )}
-                                </div>
-                              ))}
-                              {Array.from({ length: Math.max(0, 3 - (item.image?.savedVersions?.length || 0)) }).map((_, i) => (
-                                <div 
-                                  key={i} 
-                                  className="relative w-[48px] h-[85px] border border-gray-200 rounded-sm bg-gray-50"
-                                />
-                              ))}
-                            </div>
-                          </div>
-                          
-                          <div className="border-t my-2" />
-                          
-                          <div className="space-y-2">
-                            {item.audio?.url ? (
-                              <div className="flex items-center gap-2">
-                                <AudioPlayer
-                                  audioUrl={item.audio.url}
-                                  remountKey={audioRemountKeys[item.number]}
-                                />
-                                
-                                <Button
-                                  variant="outline"
-                                  onClick={() => handleNewAudio(item)}
-                                  disabled={processingNewAudio.has(item.number) || isReplaceImagesInProgress}
-                                  className="flex-none text-xs -mt-3 relative"
-                                  style={{ width: '90px', height: '70px' }}
-                                >
-                                  {processingNewAudio.has(item.number) ? (
-                                    <div className="flex flex-col items-center">
-                                      <div className="animate-spin h-4 w-4 border-2 border-primary rounded-full border-t-transparent mb-1" />
-                                      <span>Processing</span>
-                                    </div>
-                                  ) : (
-                                    "New Audio"
-                                  )}
-                                </Button>
-                                
-                                {/* Show Restore Audio button only if there's a saved version */}
-                                {hasTrack2.has(item.number) && (
-                                  <Button
-                                    variant="outline"
-                                    onClick={() => handleRestoreAudio(item)}
-                                    disabled={processingNewAudio.has(item.number)}
-                                    className="flex-none text-xs -mt-3 relative"
-                                    style={{ width: '90px', height: '70px' }}
+                                  <Button 
+                                    variant="outline" 
+                                    onClick={() => handleNewImageSet(item)}
+                                    disabled={
+                                      processingNewImageSet.has(item.number) || 
+                                      (isReplaceImagesInProgress && checkForJpgoldset(item.number) === false)
+                                    }
+                                    className="whitespace-nowrap text-sm w-full justify-center"
+                                    size="sm"
                                   >
-                                    Restore Audio
+                                    {processingNewImageSet.has(item.number) ? (
+                                      <div className="flex items-center">
+                                        <div className="animate-spin h-4 w-4 border-2 border-primary rounded-full border-t-transparent mr-2" />
+                                        <span>Processing...</span>
+                                      </div>
+                                    ) : (
+                                      getButtonText(item)
+                                    )}
                                   </Button>
+                                </div>
+                                <div className="flex gap-1 justify-end">
+                                  {item.image?.savedVersions?.map((version, idx) => (
+                                    <div 
+                                      key={`${version.path}-${idx}`}
+                                      className="relative w-[48px] h-[85px] cursor-pointer hover:opacity-80 transition-opacity"
+                                      onClick={async () => {
+                                        if (swappingImages.has(version.path)) return
+                                        try {
+                                          setSwappingImages(prev => new Set([...prev, version.path, item.image!.path]))
+                                          await swapStoryboardImage({
+                                            originalPath: item.image!.path,
+                                            thumbnailPath: version.path
+                                          })
+                                          await fetchProject()
+                                        } catch (error) {
+                                          console.error('Error swapping images:', error)
+                                          toast.error(getUserFriendlyError(error))
+                                        } finally {
+                                          setSwappingImages(prev => {
+                                            const next = new Set(prev)
+                                            next.delete(version.path)
+                                            next.delete(item.image!.path)
+                                            return next
+                                          })
+                                        }
+                                      }}
+                                    >
+                                      <Image 
+                                        src={version.url}
+                                        alt={`Version ${idx + 1}`}
+                                        fill
+                                        className={`object-cover rounded-sm border border-gray-200 ${
+                                          swappingImages.has(version.path) ? 'opacity-50' : ''
+                                        }`}
+                                        sizes="48px"
+                                      />
+                                      {swappingImages.has(version.path) && (
+                                        <div className="absolute inset-0 flex items-center justify-center">
+                                          <div className="animate-spin h-4 w-4 border-2 border-primary rounded-full border-t-transparent" />
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                  {Array.from({ length: Math.max(0, 3 - (item.image?.savedVersions?.length || 0)) }).map((_, i) => (
+                                    <div 
+                                      key={i} 
+                                      className="relative w-[48px] h-[85px] border border-gray-200 rounded-sm bg-gray-50"
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+                              
+                              <div className="border-t my-2" />
+                              
+                              <div className="space-y-2">
+                                {processingNewAudio.has(item.number) ? (
+                                  <div className="flex items-center gap-2">
+                                    {/* Show processing state in place of the audio player */}
+                                    <div className="flex-1 h-[70px] flex items-center justify-center bg-gray-50 rounded-md">
+                                      <div className="flex flex-col items-center">
+                                        <div className="animate-spin h-6 w-6 border-4 border-primary rounded-full border-t-transparent mb-1" />
+                                        <span className="text-sm text-gray-500">Processing Audio...</span>
+                                      </div>
+                                    </div>
+                                    
+                                    <Button
+                                      variant="outline"
+                                      disabled={true}
+                                      className="flex-none text-xs -mt-3 relative"
+                                      style={{ width: '90px', height: '70px' }}
+                                    >
+                                      <div className="flex flex-col items-center">
+                                        <div className="animate-spin h-4 w-4 border-2 border-primary rounded-full border-t-transparent mb-1" />
+                                        <span>Processing</span>
+                                      </div>
+                                    </Button>
+                                    
+                                    {/* Show Restore Audio button in disabled state if available */}
+                                    {hasTrack2.has(item.number) && (
+                                      <Button
+                                        variant="outline"
+                                        disabled={true}
+                                        className="flex-none text-xs -mt-3 relative"
+                                        style={{ width: '90px', height: '70px' }}
+                                      >
+                                        Restore Audio
+                                      </Button>
+                                    )}
+                                  </div>
+                                ) : item.audio?.url ? (
+                                  <div className="flex items-center gap-2">
+                                    <AudioPlayer
+                                      audioUrl={item.audio.url}
+                                      remountKey={audioRemountKeys[item.number]}
+                                    />
+                                    
+                                    <Button
+                                      variant="outline"
+                                      onClick={() => setConfirmNewAudioItem(item)}
+                                      disabled={processingNewAudio.has(item.number) || isReplaceImagesInProgress}
+                                      className="flex-none text-xs -mt-3 relative"
+                                      style={{ width: '90px', height: '70px' }}
+                                    >
+                                      New Audio
+                                    </Button>
+                                    
+                                    {/* Show Restore Audio button only if there's a saved version */}
+                                    {hasTrack2.has(item.number) && (
+                                      <Button
+                                        variant="outline"
+                                        onClick={() => handleRestoreAudio(item)}
+                                        disabled={processingNewAudio.has(item.number)}
+                                        className="flex-none text-xs -mt-3 relative"
+                                        style={{ width: '90px', height: '70px' }}
+                                      >
+                                        Restore Audio
+                                      </Button>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="h-[70px] flex items-center justify-center">
+                                    <p className="text-sm text-muted-foreground">Audio file not found</p>
+                                  </div>
                                 )}
                               </div>
-                            ) : (
-                              <div className="h-[70px] flex items-center justify-center">
-                                <p className="text-sm text-muted-foreground">Audio file not found</p>
-                              </div>
-                            )}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                  {items.length > 1 && (
-                    <>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="absolute left-0 top-1/2 transform -translate-y-1/2 bg-background"
-                        onClick={() => scrollContainerRef.current?.scrollBy({ left: -341, behavior: 'smooth' })}
-                      >
-                        <ChevronLeft className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="absolute right-0 top-1/2 transform -translate-y-1/2 bg-background"
-                        onClick={() => scrollContainerRef.current?.scrollBy({ left: 341, behavior: 'smooth' })}
-                      >
-                        <ChevronRight className="h-4 w-4" />
-                      </Button>
-                      <Slider
-                        value={[sliderValue]}
-                        onValueChange={handleScrollSliderChange}
-                        max={100}
-                        step={1}
-                        className="w-full"
-                      />
-                    </>
-                  )}
-                </div>
-              ) : (
-                <Card className="p-8 text-center">
-                  <p className="text-muted-foreground">No storyboard images available yet.</p>
-                </Card>
+                            </CardContent>
+                          </Card>
+                        ))}
+                      </div>
+                      {visibleItems.length > 1 && (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="absolute left-0 top-1/2 transform -translate-y-1/2 bg-background"
+                            onClick={() => scrollContainerRef.current?.scrollBy({ left: -341, behavior: 'smooth' })}
+                          >
+                            <ChevronLeft className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="absolute right-0 top-1/2 transform -translate-y-1/2 bg-background"
+                            onClick={() => scrollContainerRef.current?.scrollBy({ left: 341, behavior: 'smooth' })}
+                          >
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                          <Slider
+                            value={[sliderValue]}
+                            onValueChange={handleScrollSliderChange}
+                            max={100}
+                            step={1}
+                            className="w-full"
+                          />
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <Card className="p-8 text-center">
+                      <p className="text-muted-foreground">No storyboard images or audio available yet.</p>
+                    </Card>
+                  );
+                })()
               )}
             </Card>
           </TabsContent>
@@ -4881,7 +4965,7 @@ export default function ProjectDetail() {
               primary image. Are you sure you want to proceed?
             </p>
           </div>
-          <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:justify-between">
+          <DialogFooter className="flex flex-col sm:flex-row sm:justify-between">
             <Button
               type="button"
               variant="outline"
@@ -4891,30 +4975,16 @@ export default function ProjectDetail() {
             >
               Cancel
             </Button>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => {
-                  savePreferenceToCookie();
-                  const item = confirmReplaceItem;
-                  setConfirmReplaceItem(null);
-                  if (item) processImageAction(item);
-                }}
-              >
-                Proceed & Don&apos;t Show Again
-              </Button>
-              <Button
-                type="button"
-                onClick={() => {
-                  const item = confirmReplaceItem;
-                  setConfirmReplaceItem(null);
-                  if (item) processImageAction(item);
-                }}
-              >
-                Proceed
-              </Button>
-            </div>
+            <Button
+              type="button"
+              onClick={() => {
+                const item = confirmReplaceItem;
+                setConfirmReplaceItem(null);
+                if (item) processImageAction(item);
+              }}
+            >
+              Proceed
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -5093,6 +5163,42 @@ export default function ProjectDetail() {
               ) : (
                 "Proceed"
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* New Audio Confirmation Dialog */}
+      <Dialog open={confirmNewAudioItem !== null} onOpenChange={(open) => !open && setConfirmNewAudioItem(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Generate New Audio</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <p>
+              This will generate new audio for this section. The current audio will be saved and can be restored later.
+              Are you sure you want to proceed?
+            </p>
+          </div>
+          <DialogFooter className="flex flex-col sm:flex-row sm:justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setConfirmNewAudioItem(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                const item = confirmNewAudioItem;
+                setConfirmNewAudioItem(null);
+                if (item) handleNewAudio(item);
+              }}
+            >
+              Proceed
             </Button>
           </DialogFooter>
         </DialogContent>
