@@ -336,7 +336,6 @@ export default function ProjectDetail() {
   const [confirmProjectName, setConfirmProjectName] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
   const router = useRouter()
-  const [primaryTrack, setPrimaryTrack] = useState<number>(1)
   const [hasTrack2, setHasTrack2] = useState<Set<number>>(new Set())
   const forcedTrack2ItemsRef = useRef<Set<number>>(new Set())
   const [swappingImages, setSwappingImages] = useState<Set<string>>(new Set())
@@ -1672,22 +1671,15 @@ export default function ProjectDetail() {
       if (!session) throw new Error('No session');
       if (!project) throw new Error('No project');
       
-      // Store the item number to preserve track2 status
+      // Store the item number
       const itemNumber = item.number;
       
       setProcessingNewAudio(prev => new Set(prev).add(itemNumber));
       
-      // Save the current audio (Track 1) to oldset1
+      // Save the current audio to oldset1
       await saveAudioToOldSet({
         audioPath: item.audio.path,
         trackNumber: 1
-      });
-      
-      // Update hasTrack2 state to show Track 2 button immediately
-      setHasTrack2(prev => {
-        const newSet = new Set(prev);
-        newSet.add(itemNumber);
-        return newSet;
       });
       
       // Trigger storyboard generation to create new audio
@@ -1718,9 +1710,6 @@ export default function ProjectDetail() {
                 return next;
               });
               
-              // Set track 2 as primary since the new audio is now the original file
-              setPrimaryTrack(2);
-              
               // Fetch the updated project data
               await fetchProject();
               
@@ -1730,12 +1719,14 @@ export default function ProjectDetail() {
                 [itemNumber]: Date.now()
               }));
               
-              // Force update hasTrack2 after fetchProject
+              // Add this item to hasTrack2 to show the Restore Audio button
               setHasTrack2(prev => {
                 const newSet = new Set(prev);
                 newSet.add(itemNumber);
                 return newSet;
               });
+              
+              toast.success('New audio generated successfully');
             }
           } catch (error) {
             console.error('Error checking storyboard status:', error);
@@ -1759,66 +1750,6 @@ export default function ProjectDetail() {
     } catch (error) {
       console.error('Error generating new audio:', error);
       toast.error(getUserFriendlyError(error));
-      setProcessingNewAudio(prev => {
-        const next = new Set(prev);
-        next.delete(item.number);
-        return next;
-      });
-    }
-  };
-
-  // Modify the handleTrackSelection function
-  const handleTrackSelection = async (track: 1 | 2, item: StoryboardItem) => {
-    if (!item.audio?.path || processingNewAudio.has(item.number)) return;
-    
-    // If this track is already primary, do nothing
-    if (primaryTrack === track) return;
-    
-    try {
-      // First check if the track exists
-      const trackExists = await checkAudioTrackExists({
-        audioPath: item.audio.path,
-        trackNumber: track
-      });
-      
-      if (!trackExists) {
-        toast.error(`Track ${track} does not exist for this audio`);
-        return;
-      }
-      
-      setProcessingNewAudio(prev => new Set(prev).add(item.number));
-      
-      // Save the current audio (original) to the appropriate oldset
-      // If Track 1 is active and we're switching to Track 2, save to oldset1
-      // If Track 2 is active and we're switching to Track 1, save to oldset2
-      await saveAudioToOldSet({
-        audioPath: item.audio.path,
-        trackNumber: primaryTrack
-      });
-      
-      // Restore from the selected track's oldset to become the new original
-      const result = await restoreAudioFromOldSet({
-        audioPath: item.audio.path,
-        trackNumber: track
-      });
-      
-      if (!result.success) {
-        throw new Error(`Failed to restore audio from track ${track}`);
-      }
-      
-      // Update the primary track
-      setPrimaryTrack(track);
-      
-      // Force remount of the audio player by updating its key
-      setAudioRemountKeys(prev => ({
-        ...prev,
-        [item.number]: Date.now()
-      }));
-      
-    } catch (error) {
-      console.error('Error switching audio track:', error);
-      toast.error(getUserFriendlyError(error));
-    } finally {
       setProcessingNewAudio(prev => {
         const next = new Set(prev);
         next.delete(item.number);
@@ -2076,7 +2007,7 @@ export default function ProjectDetail() {
 
   // Add a function to determine which track is active
   const determineActiveTrack = useCallback(async () => {
-    // For each item with audio, check which track exists as an oldset
+    // For each item with audio, check if track1 exists as an oldset
     for (const item of items) {
       if (item.audio?.path) {
         // Check if track1 exists as an oldset
@@ -2085,26 +2016,16 @@ export default function ProjectDetail() {
           trackNumber: 1
         });
         
-        // Check if track2 exists as an oldset
-        const track2Exists = await checkAudioTrackExists({
-          audioPath: item.audio.path,
-          trackNumber: 2
-        });
-        
-        // If track1 exists as an oldset, then track2 is active (in the original slot)
-        if (track1Exists && !track2Exists) {
-          setPrimaryTrack(2);
-          return;
+        // If track1 exists as an oldset, add this item to hasTrack2
+        if (track1Exists) {
+          setHasTrack2(prev => {
+            const newSet = new Set(prev);
+            newSet.add(item.number);
+            return newSet;
+          });
         }
         
-        // If track2 exists as an oldset, then track1 is active (in the original slot)
-        if (track2Exists && !track1Exists) {
-          setPrimaryTrack(1);
-          return;
-        }
-        
-        // If both exist or neither exist, default to track1
-        setPrimaryTrack(1);
+        // We only need to check one item to confirm the API works
         return;
       }
     }
@@ -3037,6 +2958,54 @@ export default function ProjectDetail() {
       toast.error('Failed to save publishing information');
     } finally {
       setIsPublishing(false);
+    }
+  };
+
+  // Update the handleRestoreAudio function
+  const handleRestoreAudio = async (item: StoryboardItem) => {
+    if (!item.audio?.path || processingNewAudio.has(item.number)) return;
+    
+    try {
+      // Check if the saved audio exists
+      const savedAudioExists = await checkAudioTrackExists({
+        audioPath: item.audio.path,
+        trackNumber: 1 // We're still using track 1 for the saved version
+      });
+      
+      if (!savedAudioExists) {
+        toast.error('No saved audio version available to restore');
+        return;
+      }
+      
+      setProcessingNewAudio(prev => new Set(prev).add(item.number));
+      
+      // Restore from the saved audio (oldset1) to become the new original
+      const result = await restoreAudioFromOldSet({
+        audioPath: item.audio.path,
+        trackNumber: 1 // Always restore from track 1 oldset
+      });
+      
+      if (!result.success) {
+        throw new Error('Failed to restore audio');
+      }
+      
+      // Force remount of the audio player by updating its key
+      setAudioRemountKeys(prev => ({
+        ...prev,
+        [item.number]: Date.now()
+      }));
+      
+      toast.success('Audio restored successfully');
+      
+    } catch (error) {
+      console.error('Error restoring audio:', error);
+      toast.error(getUserFriendlyError(error));
+    } finally {
+      setProcessingNewAudio(prev => {
+        const next = new Set(prev);
+        next.delete(item.number);
+        return next;
+      });
     }
   };
 
@@ -4318,51 +4287,35 @@ export default function ProjectDetail() {
                                   remountKey={audioRemountKeys[item.number]}
                                 />
                                 
-                                {hasTrack2.has(item.number) ? (
+                                <Button
+                                  variant="outline"
+                                  onClick={() => handleNewAudio(item)}
+                                  disabled={processingNewAudio.has(item.number) || isReplaceImagesInProgress}
+                                  className="flex-none text-xs -mt-3 relative"
+                                  style={{ width: '90px', height: '70px' }}
+                                >
+                                  {processingNewAudio.has(item.number) ? (
+                                    <div className="flex flex-col items-center">
+                                      <div className="animate-spin h-4 w-4 border-2 border-primary rounded-full border-t-transparent mb-1" />
+                                      <span>Processing</span>
+                                    </div>
+                                  ) : (
+                                    "New Audio"
+                                  )}
+                                </Button>
+                                
+                                {/* Show Restore Audio button only if there's a saved version */}
+                                {hasTrack2.has(item.number) && (
                                   <Button
                                     variant="outline"
-                                    onClick={() => handleTrackSelection(2, item)}
+                                    onClick={() => handleRestoreAudio(item)}
                                     disabled={processingNewAudio.has(item.number)}
                                     className="flex-none text-xs -mt-3 relative"
                                     style={{ width: '90px', height: '70px' }}
                                   >
-                                    <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
-                                      primaryTrack === 2 ? 'bg-green-500' : 'bg-gray-300'
-                                    }`} />
-                                    Track 2
-                                  </Button>
-                                ) : (
-                                  <Button
-                                    variant="outline"
-                                    onClick={() => handleNewAudio(item)}
-                                    disabled={processingNewAudio.has(item.number) || isReplaceImagesInProgress}
-                                    className="flex-none text-xs -mt-3 relative"
-                                    style={{ width: '90px', height: '70px' }}
-                                  >
-                                    {processingNewAudio.has(item.number) ? (
-                                      <div className="flex flex-col items-center">
-                                        <div className="animate-spin h-4 w-4 border-2 border-primary rounded-full border-t-transparent mb-1" />
-                                        <span>Processing</span>
-                                      </div>
-                                    ) : (
-                                      "New Audio"
-                                    )}
+                                    Restore Audio
                                   </Button>
                                 )}
-                                
-                                {/* Always show Track 1 button */}
-                                <Button
-                                  variant="outline"
-                                  onClick={() => handleTrackSelection(1, item)}
-                                  disabled={processingNewAudio.has(item.number)}
-                                  className="flex-none text-xs -mt-3 relative"
-                                  style={{ width: '90px', height: '70px' }}
-                                >
-                                  <div className={`absolute top-2 right-2 w-3 h-3 rounded-full ${
-                                    primaryTrack === 1 ? 'bg-green-500' : 'bg-gray-300'
-                                  }`} />
-                                  Track 1
-                                </Button>
                               </div>
                             ) : (
                               <div className="h-[70px] flex items-center justify-center">
