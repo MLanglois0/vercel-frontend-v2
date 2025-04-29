@@ -876,7 +876,7 @@ export async function createMasterPronunciationDictionary(
         dictionaryName: dictionaryInfo.name,
         dictionaryFileName: `${dictionaryInfo.name}.pls`,
         apiAccessible: false,
-        created: false,
+        created: false, // Always false since we never create dictionaries
         updated: true,
         data: {
           id: dictionaryInfo.id,
@@ -893,6 +893,19 @@ export async function createMasterPronunciationDictionary(
     const dictionaryName = dictionaryInfo.name
     const dictionaryFileName = `${dictionaryName}.pls`
 
+    // Check if the dictionary exists - if not, log an error but don't try to create it
+    if (!dictionaryInfo.id) {
+      console.error('Master dictionary does not exist - dictionary creation is not supported in this function')
+      return {
+        dictionaryName,
+        dictionaryFileName,
+        apiAccessible: false,
+        created: false, // Always false
+        updated: false,
+        reason: 'Dictionary does not exist and creation is not supported'
+      }
+    }
+    
     // Create PLS content from pronunciation corrections
     const plsContent = createPlsDictionaryContent(pronunciationCorrections)
     console.log('==================================================')

@@ -900,7 +900,7 @@ export default function ProjectDetail() {
       // If there are pronunciation corrections, create/update the master dictionary first
       if (pronunciationCorrections.length > 0) {
         try {
-          // First, create/update the master pronunciation dictionary in ElevenLabs
+          // First, update the master pronunciation dictionary in ElevenLabs with new rules
           const mappedCorrections = mapPronunciationCorrections(pronunciationCorrections)
           const result = await createMasterPronunciationDictionary(
             session.user.id,
@@ -910,8 +910,8 @@ export default function ProjectDetail() {
             mappedCorrections
           )
           
-          if (result.created) {
-            console.log('Master pronunciation dictionary created/updated successfully')
+          if (result.updated) {
+            console.log('Master pronunciation dictionary updated successfully')
             
             // Update the project with the dictionary name (for reference)
             const { error: updateError } = await supabase
@@ -943,12 +943,12 @@ export default function ProjectDetail() {
             // Set the dictionary parameter for the command
             dictionaryParam = ` -pd "${masterDictionaryName}"`
           } else {
-            console.error('Error creating master pronunciation dictionary:', result.reason)
-            toast.error('Failed to create master pronunciation dictionary')
+            console.error('Error updating master pronunciation dictionary:', result.reason)
+            toast.error('Failed to update master pronunciation dictionary')
           }
         } catch (error) {
-          console.error('Error creating pronunciation dictionary:', error)
-          toast.error('Failed to create pronunciation dictionary')
+          console.error('Error updating pronunciation dictionary:', error)
+          toast.error('Failed to update pronunciation dictionary')
         }
       } else if (project.pls_dict_name) {
         // If no new corrections but project has a dictionary name, use the master dictionary
@@ -1364,7 +1364,13 @@ export default function ProjectDetail() {
             // Status has changed, update status and fetch new file list
             console.log('Project status changed, refreshing files')
             setProjectStatus(newStatus)
-            setProcessingNewImageSet(new Set())
+            
+            // Only clear processingNewImageSet if storyboard has completed
+            if (newStatus.Storyboard_Status === "Storyboard Complete") {
+              setProcessingNewImageSet(new Set())
+              setProcessingItems(new Set())
+              setIsReplaceImagesInProgress(false) // Always reset this flag on completion
+            }
             
             // Check if storyboard status has specifically changed TO "Storyboard Complete" from something else
             const storyboardJustCompleted = 
@@ -1387,6 +1393,10 @@ export default function ProjectDetail() {
                 setTimeout(async () => {
                   await fetchProject();
                   console.log('Refreshed files after storyboard completion');
+                  // Force clear processing states after refresh to ensure UI updates
+                  setProcessingNewImageSet(new Set());
+                  setProcessingItems(new Set());
+                  setIsReplaceImagesInProgress(false);
                 }, 3000);
               } else {
                 await fetchProject();
@@ -1683,17 +1693,18 @@ export default function ProjectDetail() {
         trackNumber: 1
       });
       
-      // Trigger storyboard generation to create new audio
-      await handleGenerateStoryboard();
+      // Instead of triggering storyboard generation which shows a confirmation dialog,
+      // directly call the processStoryboardGeneration function
+      await processStoryboardGeneration();
       
       // Add a delay before starting to check for completion
-      let checkInterval: NodeJS.Timeout | null = null;
-      let cleanupTimeout: NodeJS.Timeout | null = null;
-      let initialDelayTimeout: NodeJS.Timeout | null = null;
+      let audioCheckInterval: NodeJS.Timeout | null = null;
+      let audioCleanupTimeout: NodeJS.Timeout | null = null;
+      let audioInitialDelayTimeout: NodeJS.Timeout | null = null;
       
       // Initial delay before starting to check
-      initialDelayTimeout = setTimeout(() => {
-        checkInterval = setInterval(async () => {
+      audioInitialDelayTimeout = setTimeout(() => {
+        audioCheckInterval = setInterval(async () => {
           try {
             const status = await getProjectStatus({
               userId: session.user.id,
@@ -1701,9 +1712,9 @@ export default function ProjectDetail() {
             });
             
             if (status?.Storyboard_Status === "Storyboard Complete") {
-              if (initialDelayTimeout) clearTimeout(initialDelayTimeout);
-              if (checkInterval) clearInterval(checkInterval);
-              if (cleanupTimeout) clearTimeout(cleanupTimeout);
+              if (audioInitialDelayTimeout) clearTimeout(audioInitialDelayTimeout);
+              if (audioCheckInterval) clearInterval(audioCheckInterval);
+              if (audioCleanupTimeout) clearTimeout(audioCleanupTimeout);
               
               setProcessingNewAudio(prev => {
                 const next = new Set(prev);
@@ -1731,15 +1742,15 @@ export default function ProjectDetail() {
             }
           } catch (error) {
             console.error('Error checking storyboard status:', error);
-            if (initialDelayTimeout) clearTimeout(initialDelayTimeout);
-            if (checkInterval) clearInterval(checkInterval);
+            if (audioInitialDelayTimeout) clearTimeout(audioInitialDelayTimeout);
+            if (audioCheckInterval) clearInterval(audioCheckInterval);
           }
         }, 5000); // Check every 5 seconds
         
         // Cleanup interval after 10 minutes to prevent infinite checking
-        cleanupTimeout = setTimeout(() => {
-          if (initialDelayTimeout) clearTimeout(initialDelayTimeout);
-          if (checkInterval) clearInterval(checkInterval);
+        audioCleanupTimeout = setTimeout(() => {
+          if (audioInitialDelayTimeout) clearTimeout(audioInitialDelayTimeout);
+          if (audioCheckInterval) clearInterval(audioCheckInterval);
           setProcessingNewAudio(prev => {
             const next = new Set(prev);
             next.delete(itemNumber);
@@ -1837,12 +1848,14 @@ export default function ProjectDetail() {
   const processImageAction = async (item: StoryboardItem) => {
     if (!item.image?.path) return
     
+    // Store isRestoreAction outside try/catch so it's available in finally block
+    const isRestoreAction = checkForJpgoldset(item.number)
+    
     try {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('No session')
       if (!project) throw new Error('No project')
 
-      const isRestoreAction = checkForJpgoldset(item.number)
       const itemNumber = item.number
 
       setProcessingNewImageSet(prev => new Set(prev).add(itemNumber))
@@ -1958,6 +1971,9 @@ export default function ProjectDetail() {
                   return next
                 })
                 
+                // Always reset the replace images flag
+                setIsReplaceImagesInProgress(false)
+                
                 await fetchProject()
               }
             } catch (error) {
@@ -1976,6 +1992,7 @@ export default function ProjectDetail() {
               next.delete(itemNumber)
               return next
             })
+            setIsReplaceImagesInProgress(false) // Reset the flag on timeout too
           }, 600000)
         }, 6000) // Initial 6 second delay
       }
@@ -1985,16 +2002,20 @@ export default function ProjectDetail() {
       // Reset the replace images flag on error
       setIsReplaceImagesInProgress(false)
     } finally {
-      setProcessingNewImageSet(prev => {
-        const next = new Set(prev)
-        next.delete(item.number)
-        return next
-      })
-      setProcessingItems(prev => {
-        const next = new Set(prev)
-        next.delete(item.number)
-        return next
-      })
+      // Only clear processing state if this is a restore action
+      // For replace actions, we want to keep the processing indicator until completion
+      if (isRestoreAction) {
+        setProcessingNewImageSet(prev => {
+          const next = new Set(prev)
+          next.delete(item.number)
+          return next
+        })
+        setProcessingItems(prev => {
+          const next = new Set(prev)
+          next.delete(item.number)
+          return next
+        })
+      }
     }
   }
 
@@ -2275,14 +2296,18 @@ export default function ProjectDetail() {
           // Set the flag to update the dictionary
           setShouldUpdateDictionary(true)
           
-          // Call the server action to update the master dictionary
-          await createMasterPronunciationDictionary(
+          // Call the server action to update the master dictionary with remaining rules
+          const result = await createMasterPronunciationDictionary(
             session.user.id,
             project.id,
             project.project_name,
             project.book_title,
             mapPronunciationCorrections(updatedCorrections)
           )
+          
+          if (!result.updated) {
+            console.error('Error updating master dictionary after rule deletion:', result.reason)
+          }
         } catch (dictError) {
           console.error('Error updating pronunciation dictionary after deletion:', dictError)
         }
@@ -5177,6 +5202,11 @@ export default function ProjectDetail() {
           <div className="py-4">
             <p>
               This will generate new audio for this section. The current audio will be saved and can be restored later.
+            </p>
+            <p className="mt-2">
+              You can update your pronunciation rules on the intake tab before generating new audio and your changes will be included in this new audio file.
+            </p>
+            <p className="mt-2">
               Are you sure you want to proceed?
             </p>
           </div>
