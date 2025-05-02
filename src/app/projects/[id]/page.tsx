@@ -439,6 +439,10 @@ export default function ProjectDetail() {
     author_website: ""
   });
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isLoadingPublishFormData, setIsLoadingPublishFormData] = useState(false);
+  const [isPublishStatusDialogOpen, setIsPublishStatusDialogOpen] = useState(false);
+  const [isUpdatingPublishStatus, setIsUpdatingPublishStatus] = useState(false);
+  const [currentPublishStatus, setCurrentPublishStatus] = useState<boolean | null>(null);
 
   // Add a state to track previous storyboard status
   const [previousStoryboardStatus, setPreviousStoryboardStatus] = useState<string | null>(null);
@@ -3072,6 +3076,108 @@ export default function ProjectDetail() {
     }
   };
 
+  // Add function to handle publishing status update
+  const updatePublishStatus = async (publish: boolean) => {
+    if (!project) return;
+    
+    setIsUpdatingPublishStatus(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('No session');
+      
+      // Update the publish_status in the published_audiobooks table
+      const { error } = await supabase
+        .from('published_audiobooks')
+        .update({
+          publish_status: publish
+        })
+        .eq('userid', session.user.id)
+        .eq('projectid', project.id);
+      
+      if (error) throw error;
+      
+      // Update the local state
+      setCurrentPublishStatus(publish);
+      
+      toast.success(`Audiobook has been ${publish ? 'published' : 'unpublished'}`);
+      setIsPublishStatusDialogOpen(false);
+    } catch (error) {
+      console.error('Error updating publish status:', error);
+      toast.error('Failed to update publishing status');
+    } finally {
+      setIsUpdatingPublishStatus(false);
+    }
+  };
+
+  // Fetch the current publish status when loading the project
+  useEffect(() => {
+    const fetchPublishStatus = async () => {
+      if (!project || mode !== "production") return;
+      
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        
+        const { data, error } = await supabase
+          .from('published_audiobooks')
+          .select('publish_status')
+          .eq('userid', session.user.id)
+          .eq('projectid', project.id)
+          .maybeSingle();
+        
+        if (error) throw error;
+        
+        if (data) {
+          setCurrentPublishStatus(data.publish_status);
+        }
+      } catch (error) {
+        console.error('Error fetching publish status:', error);
+      }
+    };
+    
+    fetchPublishStatus();
+  }, [project, mode]);
+
+  // Fetch the current publish status and form data when loading the project
+  useEffect(() => {
+    const fetchPublishData = async () => {
+      if (!project || mode !== "production") return;
+      
+      try {
+        setIsLoadingPublishFormData(true);
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        
+        const { data, error } = await supabase
+          .from('published_audiobooks')
+          .select('publish_status, blurb, book_url, author_website')
+          .eq('userid', session.user.id)
+          .eq('projectid', project.id)
+          .maybeSingle();
+        
+        if (error) throw error;
+        
+        if (data) {
+          // Set publish status
+          setCurrentPublishStatus(data.publish_status);
+          
+          // Populate form data with existing values
+          setPublishFormData({
+            blurb: data.blurb || "",
+            book_url: data.book_url || "",
+            author_website: data.author_website || ""
+          });
+        }
+      } catch (error) {
+        console.error('Error fetching publishing data:', error);
+      } finally {
+        setIsLoadingPublishFormData(false);
+      }
+    };
+    
+    fetchPublishData();
+  }, [project, mode]);
+
   if (loading) return <div>Loading...</div>
   if (!project) return <div>Project not found</div>
   // Show loading indicator if mode is still being determined
@@ -4614,21 +4720,49 @@ export default function ProjectDetail() {
 
           <TabsContent value="audiobook">
             <Card className="p-2 border-0 shadow-none">
-              <div className="flex justify-between items-center mb-4">
+              <div className="flex justify-between items-start mb-4">
                 <h3 className="text-2xl font-semibold">Audiobook Stream</h3>
-                {projectStatus?.Audiobook_Status === "Audiobook Complete" && (
-                  <Button
-                    variant="outline"
-                    onClick={handleProductionModeToggle}
-                    disabled={mode === "production" || isActivatingProduction || !canEnableProductionMode()}
-                    className={mode === "production" ? 
-                      "bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800 border-green-200" : 
-                      "bg-blue-600 text-white hover:bg-blue-700"}
-                  >
-                    {mode === "production" ? "Production Mode Active" : "Enter Production Mode"}
-                  </Button>
-                )}
+                <div className="flex flex-col gap-2">
+                  {/* Production Mode Button */}
+                  {projectStatus?.Audiobook_Status === "Audiobook Complete" && mode !== "production" && (
+                    <Button
+                      variant="outline"
+                      onClick={handleProductionModeToggle}
+                      disabled={isActivatingProduction || !canEnableProductionMode()}
+                      className="bg-blue-600 text-white hover:bg-blue-700"
+                    >
+                      Enter Production Mode
+                    </Button>
+                  )}
+                  
+                  {/* Production Status Indicator - only in production mode */}
+                  {mode === "production" && projectStatus?.Audiobook_Status === "Audiobook Complete" && (
+                    <Button
+                      variant="outline"
+                      disabled
+                      className={currentPublishStatus ? 
+                        "bg-green-100 text-green-700 border-green-200" : 
+                        "bg-gray-100 text-gray-700 border-gray-200"}
+                    >
+                      {currentPublishStatus ? "Published" : "Unpublished"}
+                    </Button>
+                  )}
+                  
+                  {/* Add Publishing Status Button - only shown in production mode */}
+                  {mode === "production" && projectStatus?.Audiobook_Status === "Audiobook Complete" && (
+                    <Button
+                      variant="outline"
+                      onClick={() => setIsPublishStatusDialogOpen(true)}
+                      className={currentPublishStatus ? 
+                        "bg-green-600 text-white hover:bg-green-700" : 
+                        "bg-blue-600 text-white hover:bg-blue-700"}
+                    >
+                      Update Publishing Status
+                    </Button>
+                  )}
+                </div>
               </div>
+              
               {projectStatus?.Audiobook_Status === "Audiobook Complete" ? (
                 <div className="relative">
                   <div className="flex gap-4 overflow-x-auto pb-4 scroll-smooth">
@@ -4791,50 +4925,71 @@ export default function ProjectDetail() {
                             Add details about your audiobook to prepare it for publishing.
                           </p>
                           
-                          <form onSubmit={handlePublishingFormSubmit} className="space-y-4">
-                            <div>
-                              <label className="block text-sm font-medium mb-1">Audiobook Blurb</label>
-                              <Textarea 
-                                placeholder="Enter a description of your audiobook"
-                                value={publishFormData.blurb}
-                                onChange={(e) => setPublishFormData({...publishFormData, blurb: e.target.value})}
-                                className="min-h-[100px]"
-                              />
+                          {isLoadingPublishFormData ? (
+                            <div className="space-y-4">
+                              <div>
+                                <label className="block text-sm font-medium mb-1">Audiobook Blurb</label>
+                                <div className="min-h-[100px] bg-gray-100 animate-pulse rounded-md"></div>
+                              </div>
+                              
+                              <div>
+                                <label className="block text-sm font-medium mb-1">Ebook/Print Purchase URL</label>
+                                <div className="h-10 bg-gray-100 animate-pulse rounded-md"></div>
+                              </div>
+                              
+                              <div>
+                                <label className="block text-sm font-medium mb-1">Author Website URL</label>
+                                <div className="h-10 bg-gray-100 animate-pulse rounded-md"></div>
+                              </div>
+                              
+                              <div className="w-full h-10 bg-gray-100 animate-pulse rounded-md"></div>
                             </div>
-                            
-                            <div>
-                              <label className="block text-sm font-medium mb-1">Ebook/Print Purchase URL</label>
-                              <Input 
-                                placeholder="https://example.com/your-book"
-                                value={publishFormData.book_url}
-                                onChange={(e) => setPublishFormData({...publishFormData, book_url: e.target.value})}
-                              />
-                            </div>
-                            
-                            <div>
-                              <label className="block text-sm font-medium mb-1">Author Website URL</label>
-                              <Input 
-                                placeholder="https://example.com"
-                                value={publishFormData.author_website}
-                                onChange={(e) => setPublishFormData({...publishFormData, author_website: e.target.value})}
-                              />
-                            </div>
-                            
-                            <Button 
-                              type="submit" 
-                              className="w-full"
-                              disabled={isPublishing}
-                            >
-                              {isPublishing ? (
-                                <>
-                                  <span className="mr-2">Saving...</span>
-                                  <div className="animate-spin h-4 w-4 border-2 border-white rounded-full border-t-transparent"></div>
-                                </>
-                              ) : (
-                                "Save Publishing Information"
-                              )}
-                            </Button>
-                          </form>
+                          ) : (
+                            <form onSubmit={handlePublishingFormSubmit} className="space-y-4">
+                              <div>
+                                <label className="block text-sm font-medium mb-1">Audiobook Blurb</label>
+                                <Textarea 
+                                  placeholder="Enter a description of your audiobook"
+                                  value={publishFormData.blurb}
+                                  onChange={(e) => setPublishFormData({...publishFormData, blurb: e.target.value})}
+                                  className="min-h-[100px]"
+                                />
+                              </div>
+                              
+                              <div>
+                                <label className="block text-sm font-medium mb-1">Ebook/Print Purchase URL</label>
+                                <Input 
+                                  placeholder="https://example.com/your-book"
+                                  value={publishFormData.book_url}
+                                  onChange={(e) => setPublishFormData({...publishFormData, book_url: e.target.value})}
+                                />
+                              </div>
+                              
+                              <div>
+                                <label className="block text-sm font-medium mb-1">Author Website URL</label>
+                                <Input 
+                                  placeholder="https://example.com"
+                                  value={publishFormData.author_website}
+                                  onChange={(e) => setPublishFormData({...publishFormData, author_website: e.target.value})}
+                                />
+                              </div>
+                              
+                              <Button 
+                                type="submit" 
+                                className="w-full"
+                                disabled={isPublishing}
+                              >
+                                {isPublishing ? (
+                                  <>
+                                    <span className="mr-2">Saving...</span>
+                                    <div className="animate-spin h-4 w-4 border-2 border-white rounded-full border-t-transparent"></div>
+                                  </>
+                                ) : (
+                                  "Save Publishing Information"
+                                )}
+                              </Button>
+                            </form>
+                          )}
                         </CardContent>
                       </Card>
                     )}
@@ -5231,6 +5386,47 @@ export default function ProjectDetail() {
               Proceed
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      
+      {/* Publishing Status Dialog */}
+      <Dialog open={isPublishStatusDialogOpen} onOpenChange={setIsPublishStatusDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Update Publishing Status</DialogTitle>
+            <DialogDescription>
+              Please set the status of this audiobook. Selecting &quot;Publish&quot; will make the audiobook visible on the streaming site. 
+              Selecting &quot;Unpublish&quot; will hide the audiobook. This can be updated whenever you like.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <div className="flex flex-col gap-4 items-center">
+              <p className="text-sm text-gray-500">
+                Current status: {currentPublishStatus === true 
+                  ? <span className="font-medium text-green-600">Published</span> 
+                  : currentPublishStatus === false 
+                    ? <span className="font-medium text-gray-600">Not Published</span>
+                    : <span className="font-medium text-gray-600">Not Set</span>}
+              </p>
+              <div className="flex gap-4">
+                <Button
+                  variant="outline"
+                  onClick={() => updatePublishStatus(false)}
+                  disabled={isUpdatingPublishStatus}
+                  className={!currentPublishStatus ? "bg-gray-100" : ""}
+                >
+                  Unpublish
+                </Button>
+                <Button
+                  onClick={() => updatePublishStatus(true)}
+                  disabled={isUpdatingPublishStatus}
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                >
+                  Publish
+                </Button>
+              </div>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
